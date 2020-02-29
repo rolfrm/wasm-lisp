@@ -244,10 +244,10 @@ char * symbol_ptr(i64 symbol){
   return symbol_name + (symbol >> TYPE_SHIFT);
 }
 
-i64 new_symbol(int symbol_length){
-  i64 sym = (i64)symbol_offset;
+i64 new_symbol(i64 symbol_length){
+  i64 sym = symbol_offset;
   i64 start_offset = symbol_offset;
-  symbol_offset += symbol_length + 1;
+  symbol_offset += unmki64(symbol_length) + 1;
   sym = sym << TYPE_SHIFT | TYPE_SYMBOL;
   print_str("new symbol");
   memset(symbol_name + start_offset, 0, symbol_offset - start_offset);

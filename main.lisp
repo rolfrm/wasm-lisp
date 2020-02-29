@@ -84,28 +84,14 @@ step 3: bootstrap
 	v
 	(logior v (ash -1 s)))))
 
-(defun encode-uint-leb-r(value)
+(defun encode-uint-leb (value)
   (declare ((unsigned-byte 128) value))
   (let ((byte (logand #b01111111 value)))
     (if (eq byte value)
 	(cons byte nil)
 	(cons (logior #b10000000 byte) (encode-uint-leb-r (ash value -7))))))
 
-(defun encode-uint-leb (value)
-  (if (eq value 0)
-      '(0)
-      (loop until (zerop value) collect
-	   (let ((chunk (logand value #b01111111)))
-	     (setf value (ash value -7))
-	     (if (eq 0 value)
-		 (return chunk)
-		 (logior #b10000000 chunk)
-		 )))))
-
-;; LEB 128
-;; 0b00000111 
-;; -> encoded as 
-(defun encode-int-leb-r(value)
+(defun encode-int-leb(value)
   (declare (integer value))
   (let ((bits (logand #b01111111 value))
 	(sign (logand #b01000000 value))
@@ -113,20 +99,8 @@ step 3: bootstrap
     (if (or (and (eq next 0) (eq sign 0)) (and (> sign 0) (eq next -1)))
 	(cons bits nil)
 	(cons (logior #b10000000 bits)
-	      (encode-int-leb-r next))
+	      (encode-int-leb next))
 	)))
-
-(defun encode-int-leb(value)
-  (let ((it t))
-    (loop while it collect
-	 (let ((bits (logand #b01111111 value))
-	       (sign (logand #b01000000 value)))
-	   (setf value (ash value -7))
-	   (if (or (and (eq value 0) (eq sign 0)) (and (> sign 0) (eq value -1)))
-	       (progn
-		 (setf it nil)
-		 bits)
-	       (logior #b10000000 bits))))))
 
 (defun test-ileb-rt(value)
   (let ((bytes (encode-int-leb value)))
@@ -134,7 +108,7 @@ step 3: bootstrap
       (read-int-leb rd))))
 
 (defun test-uleb-rt(value)
-  (let* ((bytes (encode-uint-leb-r value))
+  (let* ((bytes (encode-uint-leb value))
 	 (rd (make-byte-stream :bytes (make-array (length bytes) :element-type '(unsigned-byte 8) :initial-contents bytes))))
     (read-uint-leb rd)))
 
@@ -519,7 +493,7 @@ step 3: bootstrap
        )
      )
     ((symbolp code)
-     `(symbol ,code)
+     (emit `(INSTR_i64_CONST (symbol ,code)))
      )
     ))
 
@@ -540,6 +514,13 @@ step 3: bootstrap
 
 (defvar symbol-map (make-hash-table))
 
+(defun get-symbol(sym)
+  (multiple-value-bind(symid exists) (gethash sym symbol-map)
+    (if exists symid
+	(let ((newsym (run-lisp '(new-symbol ))))
+	  (setf (gethash sym symbol-map) (logior (ash (car newsym) 3) 4))
+	  ))))
+
 (defun gen-i64 (x)
   (assert (integerp x))
   (logior (ash x 3) 1))
@@ -553,6 +534,8 @@ step 3: bootstrap
 		     (setf buffer (cons (symbol-value part) buffer)))
 		    ((and (consp part) (eq (car part) 'func))
 		     (push (lookup-symbol (cadr part)) buffer))
+		    ((and (consp part) (eq (car part) 'symbol))
+		     (setf buffer (append (reverse (encode-int-leb (print (get-symbol (cadr part))))) buffer)))
 		    ((and (consp part) (eq (car part) 'I64))
 		     (setf buffer (append (reverse (encode-int-leb (gen-i64 (cadr part)))) buffer))))))
 	   
@@ -623,12 +606,26 @@ step 3: bootstrap
 	 (f (awsm-define-function mod1 name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)))
     (let ((trd (awsm-load-thread mod1 name)))
       (awsm-thread-keep-alive trd 1)
+
       (awsm-process mod1 10000)
       (let ((v (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
-	v))
-      
-    ))
+	(let ((type-code (logand v #b00000111))
+	      (value (ash v -3)))
+	  (case type-code
+	    (0 'nil)
+	    (1 value)
+	    (2 (list value 'f64))
+	    (3 (list value 'cons))
+	    (4 (list value 'symbol))
+	    (otherwise (error "Unknown"))))))))
+
+
+(defun test-leb()
+  (loop for scale in '(1 10 100 1000 10000) do
+       (loop for i upfrom (* scale -10) upto (* scale 10) by scale do
+	    (assert (eq (run-lisp i) i))
+	    )))
 
 ;(print (run-lisp '(cons-init)))
 ;(print cons-init)
