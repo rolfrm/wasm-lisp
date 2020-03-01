@@ -1,0 +1,31 @@
+* Experimental Lisp to Web Assembly Compiler
+
+Could Lisp be used as a programming language for the web as well as desktop and mobile?
+
+WebAssembly is a virtual machine byte code language that can really be run anywhere, even in WebAssembly itself! Lisp is a high-level language that could be useful for many complicated scenarios, like GUIs. What happens if we mix these two systems?
+
+The WebAssembly VM used for the compiler is based on libawsm https://github.com/rolfrm/awsm
+
+The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly does not allow loading or modifying code at runtime. Hence the Lisp compiler will run on a modified WebAssembly engine and will after compilation save the image to a webassemby-conformant format.
+
+** High-Level Goals
+
+- Support a subset of Scheme: For example https://small.r7rs.org
+- Host itself
+- Deploy a WASM compilant image that can run in a browser.
+- GUI Framework for Lisp that runs on any platform, integrating with the native control libraries (HTML, GTK, ...). 
+
+** Tasks
+
+- Variables
+ - Function Arguments
+ - Locals
+ - Globals
+- Loops
+- Garbage Collection 
+- Symbol Names
+- Code generation in AWSM Lisp
+- FFI - Link with C functions compiled to wasm.
+
+- [DONE] defun - Defining functions
+- [DONE] conditionals (if)
