@@ -531,6 +531,43 @@ step 3: bootstrap
        (compile-lisp-inner b)
        (emit '(INSTR_END))
        ))
+    ((and (consp code) (eq 'loop (car code)))
+     (let* ((test-dr (cdr code))
+	    (test (car test-dr))
+	    (body (cdr test-dr)))
+       
+       (emit '(INSTR_LOOP (valtype i64)))
+       (compile-lisp-inner test)
+       (emit `(INSTR_I64_CONST 3))
+       (emit `(INSTR_I64_SHR_S))    
+       (emit '(INSTR_BR_IF 0))
+       (if (eq (length body) 1)
+	   (compile-lisp-inner (car body))
+	   (compile-lisp-inner `(progn @,body)))
+
+       (emit '(INSTR_END))
+       ))
+    ((and (consp code) (eq 'setf (car code)))
+     (let* ((name-dr (cdr code))
+	    (body-dr (cdr name-dr))
+	    (name (car name-dr))
+	    (body (car body-dr)))
+       (compile-lisp-inner body)
+       (let ((glob (get-global name)))
+	 (if glob (emit `(INSTR_GLOBAL_SET ,glob))
+	     (let ((local (get-local name)))
+	       (if local
+		   (emit `(INSTR_LOCAL_SET ,local))
+		   (error "Unknown symbol ~a" name)
+		   ))))))
+    ((and (consp code) (eq 'progn (car code)))
+     (let ((first t))
+       (loop for body in (cdr code) do
+	    (if first
+		(setf first nil)
+		(emit `(INSTR_DROP)))
+	    (compile-lisp-inner body)))
+     )
     ((and (consp code) (eq 'defun (car code)))
      (let* (( name-dr (cdr code))
 	    ( args-dr (cdr name-dr))
@@ -587,8 +624,7 @@ step 3: bootstrap
 		 
 		 ))
 	 (setf (compile-info-local-count *compile-info*) (max (compile-info-local-count *compile-info*) (locals-count)))
-	 
-	 (compile-lisp-inner (car body-dr))
+	 (compile-lisp-inner `(progn ,@body-dr))
 	 )
 
        ))
@@ -662,8 +698,9 @@ step 3: bootstrap
 		    ((and (consp part) (eq (car part) 'I64))
 		     (setf buffer (append (reverse (encode-int-leb (gen-i64 (cadr part)))) buffer)))
 		    ((and (consp part) (eq (car part) 'valtype) (eq (cadr part) 'i64))
-
 		     (setf buffer (cons #x73 buffer)))
+		    ((and (consp part) (eq (car part) 'valtype) (eq (cadr part) 'none))
+		     (setf buffer (cons #x40 buffer)))
 		    )))))
 	   
        (reverse buffer)))
@@ -696,7 +733,7 @@ step 3: bootstrap
 (defvar addfun (byte-vector 0 INSTR_I64_ADD INSTR_END))
 (defvar plus-add1 (awsm-get-function awsm-module "add1"))
 (import-function "add1" '+)
-(import-function "mkcons" 'cons-mk)
+(import-function "mkcons" 'cons)
 (import-function "init_cons" 'cons-init)
 (import-function "car" 'car)
 (import-function "cdr" 'cdr)
@@ -713,13 +750,14 @@ step 3: bootstrap
 
       (awsm-thread-keep-alive trd 1)
       (print code)
+      (print buf)
       (finish-output)
       (awsm-process awsm-module 10000)
       (let ((v (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
 	(let ((type-code (logand v #b00000111))
 	      (value (ash v -3)))
-	  (print (list type-code v))
+
 	  (case type-code
 	    (0 'nil)
 	    (1 value)
@@ -746,6 +784,17 @@ step 3: bootstrap
 
 (print (run-lisp '(defvar glob 10)))
 (print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
+
+;(print (run-lisp `(let ((it 5)) (loop it (setf it 0)))))
+
+;; (loop (test) (do))
+;; LOOP <type>
+;;  TEST
+;;  BR_IF
+;;  [DO DO DO]
+;; END
+
+
 					;(run-lisp '(rec-func -5))
 
 
@@ -762,3 +811,4 @@ step 3: bootstrap
 ;(print (ash (run-lisp '(cons 1 3)) -2))
 ;(print (ash (run-lisp '(cons 1 3)) -2))
 ;)
+
