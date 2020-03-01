@@ -458,6 +458,22 @@ step 3: bootstrap
 (defun emit-instr(x)
  (format t "instr: ~a~%" x))
 
+(defvar awsm-module nil)
+
+(defvar fun-ids (make-hash-table))
+
+(defun register-function (name-symbol id)
+  (setf (gethash name-symbol fun-ids) id))  
+
+(defun import-function (import-name symbol)
+  (let ((id (awsm-get-function awsm-module import-name)))
+    (register-function symbol id)))
+
+(defun lookup-symbol (sym)
+  (multiple-value-bind (v exists) (gethash sym fun-ids)
+    (assert exists)
+    v))
+
 (defun compile-lisp-inner(code)
   (cond
     ((null code) nil)
@@ -477,15 +493,24 @@ step 3: bootstrap
        (emit '(INSTR_END))
        ))
     ((and (consp code) (eq 'defun (car code)))
-     (let* ((rest (cdr code))
-	    (funname (car rest))
-	    (c (cdr rest))
-	    (args (car c))
-	    (cc (cdr c))
+     (let* (( name-dr (cdr code))
+	    ( args-dr (cdr name-dr))
+	    ( body (cdr args-dr))
+	    (name (car name-dr))
+	    (name-str (print (symbol-name name)))
+	    (body-cnt (length body))
+	    (args (car args-dr))
+	    (_ (awsm-define-function awsm-module name-str (sb-sys:int-sap 0) 0 1 (length args)))
+	    (__ (register-function name _))
+	    (code (compile-lisp
+		   (if (eq body-cnt 1) (car body) `(progn @,body) )))
+	    (byte-code (print(cons 0 (gen-byte-code code))))
+	    (byte-code-buffer (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
+	 
+	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 0))
 	    )
-       (format t "Func: ~a ~a ~%" funname args)
-       (compile-lisp-inner cc))
-     )
+       (register-function name f)
+       (compile-lisp-inner name)))
     ((consp code)
      (loop for l in (cdr code) do
 	  (compile-lisp-inner l))
@@ -506,13 +531,6 @@ step 3: bootstrap
       (emit '(INSTR_END))
       )
     buffer))
-
-(defvar fun-ids (make-hash-table))
-
-(defun lookup-symbol (sym)
-  (multiple-value-bind (v exists) (gethash sym fun-ids)
-    (assert exists)
-    v))
 
 (defvar symbol-map (make-hash-table))
 
@@ -570,42 +588,30 @@ step 3: bootstrap
 (define-alien-routine "awsm_thread_keep_alive" void (thread (* awsm-thread)) (keep-alive int))
 (define-alien-routine "awsm_pop_i64" int (thread (* awsm-thread)))
 
-
 (awsm-diagnostic t)
 
-(defvar mod1 (awsm-load-module-from-file "awsmlib.wasm"))
+(setf awsm-module (awsm-load-module-from-file "awsmlib.wasm"))
 (defvar addfun (byte-vector 0 INSTR_I64_ADD INSTR_END))
-(defvar plus-add1 (awsm-get-function mod1 "add1"))
-(setf (gethash '+ fun-ids) plus-add1)
-
-(defvar cons-mk (awsm-get-function mod1 "mkcons"))
-(setf (gethash 'cons fun-ids) cons-mk)
-
-(defvar cons-init (awsm-get-function mod1 "init_cons"))
-(setf (gethash 'cons-init fun-ids) cons-init)
-
-(defvar +car (awsm-get-function mod1 "car"))
-(setf (gethash 'car fun-ids) +car)
-
-(defvar +cdr (awsm-get-function mod1 "cdr"))
-(setf (gethash 'cdr fun-ids) +cdr)
-
-(defvar +new-symbol (awsm-get-function mod1 "new_symbol"))
-(setf (gethash 'new-symbol fun-ids) +new-symbol)
-
+(defvar plus-add1 (awsm-get-function awsm-module "add1"))
+(import-function "add1" '+)
+(import-function "mkcons" 'cons-mk)
+(import-function "init_cons" 'cons-init)
+(import-function "car" 'car)
+(import-function "cdr" 'cdr)
+(import-function "new_symbol" 'new-symbol)
 
 (defun run-lisp (lisp-code &optional (name "anon"))
   (let* (
 	 (code (compile-lisp lisp-code))
 	 (proto (cons 0 (gen-byte-code code)))
 	 (buf (make-array (length proto) :element-type '(unsigned-byte 8) :initial-contents proto))
-	 (f (awsm-define-function mod1 name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)))
-    (let ((trd (awsm-load-thread mod1 name)))
+	 (f (awsm-define-function awsm-module name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)))
+    (let ((trd (awsm-load-thread awsm-module name)))
 
       (awsm-thread-keep-alive trd 1)
       (print code)
       (finish-output)
-      (awsm-process mod1 10000)
+      (awsm-process awsm-module 10000)
       (let ((v (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
 	(let ((type-code (logand v #b00000111))
@@ -626,10 +632,15 @@ step 3: bootstrap
 	    (assert (eq (run-lisp i) i))
 	    )))
 
-
-
 (print (run-lisp '(cons-init)))
-(print (run-lisp '(if 1 2 3)))
+(print (run-lisp '(if 0 2 3)))
+(print (run-lisp '(defun xfunc () 5)))
+(print (run-lisp '(xfunc)))
+(print (run-lisp '(if 1 2 (xfunc))))
+(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
+;(run-lisp '(rec-func -5))
+
+
 					;(print (run-lisp '(if 1 2 3)))
 ;(print cons-init)
 ;(print (ash (run-lisp '5) -2))
