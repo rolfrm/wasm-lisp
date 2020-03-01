@@ -18,7 +18,7 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
 ** Tasks
 
 - Variables
- - Function Arguments
+ - [Done] Function Arguments
  - Locals
  - Globals
 - Loops
@@ -29,3 +29,4 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
 
 - [DONE] defun - Defining functions
 - [DONE] conditionals (if)
+  

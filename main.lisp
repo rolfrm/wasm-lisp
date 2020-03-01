@@ -474,9 +474,20 @@ step 3: bootstrap
     (assert exists)
     v))
 
+(defun compute-locals(args)
+  (let ((table (make-hash-table)))
+    (loop for x in args
+	  for i from 0 do
+	  (setf (gethash x table) i))
+    table
+    ))
+
+;; thread static global for storing locals
+(defvar *locals* nil)
+
 (defun compile-lisp-inner(code)
   (cond
-    ((null code) nil)
+    ((null code) (error "cannot compile nil"))
     ((integerp code)
      (emit `(INSTR_I64_CONST (I64 ,code))))
     ((and (consp code) (eq 'if (car code)))
@@ -497,20 +508,32 @@ step 3: bootstrap
 	    ( args-dr (cdr name-dr))
 	    ( body (cdr args-dr))
 	    (name (car name-dr))
-	    (name-str (print (symbol-name name)))
+	    (name-str (symbol-name name))
 	    (body-cnt (length body))
 	    (args (car args-dr))
+	    (locals-table (compute-locals args))
 	    (_ (awsm-define-function awsm-module name-str (sb-sys:int-sap 0) 0 1 (length args)))
 	    (__ (register-function name _))
 	    (code (compile-lisp
-		   (if (eq body-cnt 1) (car body) `(progn @,body) )))
+		   (if (eq body-cnt 1) (car body) `(progn @,body) )
+		   locals-table
+		   ))
 	    (byte-code (print(cons 0 (gen-byte-code code))))
 	    (byte-code-buffer (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 	 
-	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 0))
+	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
 	    )
+       ;(print (list name code))
+       ;(print byte-code)
        (register-function name f)
-       (compile-lisp-inner name)))
+       (compile-lisp-inner `(quote ,name))))
+    ((and (consp code) (eq (car code) 'quote))
+     (let ((rest (cadr code)))
+       (if (symbolp rest)
+	   (emit `(INSTR_i64_CONST (symbol ,code)))
+	 (error "Quotation not supported")))
+     )
+     
     ((consp code)
      (loop for l in (cdr code) do
 	  (compile-lisp-inner l))
@@ -519,13 +542,17 @@ step 3: bootstrap
        ;(compile-lisp-inner (car code))
        )
      )
-    ((symbolp code)
-     (emit `(INSTR_i64_CONST (symbol ,code)))
+    ((and (symbolp code) (integerp (gethash code *locals*)))
+     (emit `(INSTR_LOCAL_GET ,(gethash code *locals*)))
      )
-    ))
+    (t (error "Unsupported code"))
 
-(defun compile-lisp(code)
-  (let ((buffer ()))
+    )
+  )
+
+(defun compile-lisp(code &optional (locals (make-hash-table)))
+  (let ((buffer ())
+	(*locals* locals))
     (let ((emitf (lambda (x) (setf buffer (cons x buffer)))))
       (compile-lisp-inner code)
       (emit '(INSTR_END))
@@ -633,12 +660,15 @@ step 3: bootstrap
 	    )))
 
 (print (run-lisp '(cons-init)))
-(print (run-lisp '(if 0 2 3)))
-(print (run-lisp '(defun xfunc () 5)))
-(print (run-lisp '(xfunc)))
-(print (run-lisp '(if 1 2 (xfunc))))
-(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
-;(run-lisp '(rec-func -5))
+;(print (run-lisp '(if 0 2 3)))
+;(print (run-lisp '(defun xfunc () 5)))
+;(print (run-lisp '(xfunc)))
+;(print (run-lisp '(if 1 2 (xfunc))))
+;(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
+(run-lisp '(defun xfunc2 (x) (+ 5 x)))
+(print (run-lisp '(xfunc2 35)))
+
+					;(run-lisp '(rec-func -5))
 
 
 					;(print (run-lisp '(if 1 2 3)))
