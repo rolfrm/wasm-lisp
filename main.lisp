@@ -468,6 +468,8 @@ step 3: bootstrap
 	   (a (caddr code))
 	   (b (cadddr code)))
        (compile-lisp-inner test)
+       (emit `(INSTR_I64_CONST 3))
+       (emit `(INSTR_I64_SHR_S))
        (emit '(INSTR_IF (valtype i64)))
        (compile-lisp-inner a)
        (emit '(INSTR_ELSE))
@@ -532,12 +534,18 @@ step 3: bootstrap
 	 (loop for part in item do
 	      (cond ((symbolp part)
 		     (setf buffer (cons (symbol-value part) buffer)))
+		    ((integerp part)
+		     (setf buffer (append (encode-int-leb part) buffer)))
 		    ((and (consp part) (eq (car part) 'func))
 		     (push (lookup-symbol (cadr part)) buffer))
 		    ((and (consp part) (eq (car part) 'symbol))
 		     (setf buffer (append (reverse (encode-int-leb (print (get-symbol (cadr part))))) buffer)))
 		    ((and (consp part) (eq (car part) 'I64))
-		     (setf buffer (append (reverse (encode-int-leb (gen-i64 (cadr part)))) buffer))))))
+		     (setf buffer (append (reverse (encode-int-leb (gen-i64 (cadr part)))) buffer)))
+		    ((and (consp part) (eq (car part) 'valtype) (eq (cadr part) 'i64))
+
+		     (setf buffer (cons #x73 buffer)))
+		    )))
 	   
        (reverse buffer)))
 
@@ -553,7 +561,8 @@ step 3: bootstrap
     (struct _awsm-thread))
 
 (define-alien-routine "awsm_load_module_from_file" (* awsm-module) (file c-string))
-(define-alien-routine "awsm_define_function" int (mod (* awsm-module)) (name c-string) (data (* unsigned-char)) (len int) (retcnt int) (argcnt int))
+(define-alien-routine "awsm_define_function" int (mod (* awsm-module))
+		      (name c-string) (data (* unsigned-char)) (len int) (retcnt int) (argcnt int))
 (define-alien-routine "awsm_process" int (mod (* awsm-module)) (cnt int))
 (define-alien-routine "awsm_get_function" int (module (* awsm-module)) (name c-string))
 (define-alien-routine "awsm_load_thread" (* awsm-thread) (module (* awsm-module)) (symbol c-string))
@@ -563,19 +572,6 @@ step 3: bootstrap
 
 
 (awsm-diagnostic t)
-
-(defun test ()
-  (let  ((mod1 (awsm-load-module-from-file "../wasmrun/testlib3.wasm")))
-    (let* (
-	   (buffer (byte-vector 0 INSTR_I64_CONST 5 INSTR_I64_CONST 16 INSTR_I64_CONST 17 INSTR_END))
-	   (ptr (sb-sys:vector-sap buffer))
-	   (len (array-total-size buffer))
-	   (ptr2 (sap-alien ptr (* unsigned-char)))	 
-	   )
-      (awsm-define-function mod1 "p1" ptr2 len 1 0)
-      (awsm-load-thread mod1 "p1")
-      )
-    (awsm-process mod1 10)))
 
 (defvar mod1 (awsm-load-module-from-file "awsmlib.wasm"))
 (defvar addfun (byte-vector 0 INSTR_I64_ADD INSTR_END))
@@ -605,20 +601,23 @@ step 3: bootstrap
 	 (buf (make-array (length proto) :element-type '(unsigned-byte 8) :initial-contents proto))
 	 (f (awsm-define-function mod1 name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)))
     (let ((trd (awsm-load-thread mod1 name)))
-      (awsm-thread-keep-alive trd 1)
 
+      (awsm-thread-keep-alive trd 1)
+      (print code)
+      (finish-output)
       (awsm-process mod1 10000)
       (let ((v (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
 	(let ((type-code (logand v #b00000111))
 	      (value (ash v -3)))
+	  (print (list type-code v))
 	  (case type-code
 	    (0 'nil)
 	    (1 value)
 	    (2 (list value 'f64))
 	    (3 (list value 'cons))
 	    (4 (list value 'symbol))
-	    (otherwise (error "Unknown"))))))))
+	    (otherwise (error "Unknown ~a ~a" type-code v))))))))
 
 
 (defun test-leb()
@@ -627,7 +626,11 @@ step 3: bootstrap
 	    (assert (eq (run-lisp i) i))
 	    )))
 
-;(print (run-lisp '(cons-init)))
+
+
+(print (run-lisp '(cons-init)))
+(print (run-lisp '(if 1 2 3)))
+					;(print (run-lisp '(if 1 2 3)))
 ;(print cons-init)
 ;(print (ash (run-lisp '5) -2))
 ;(print (ash (run-lisp '(+ 1 (+ 3 (+ 4 5)))) -2))

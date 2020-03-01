@@ -235,7 +235,7 @@ int init_cons(){
   symbol_offset = 0;
   symbol_capacity = 4096;
   
-  return 5;
+  return mki64(5);
 }
 
 char * symbol_ptr(i64 symbol){
