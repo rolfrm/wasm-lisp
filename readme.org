@@ -20,12 +20,14 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
 - Variables
  - [Done] Function Arguments
  - [Done] Locals
- - Globals
+ - [Done] Globals
 - Loops
 - Garbage Collection 
 - Symbol Names
 - Code generation in AWSM Lisp
 - FFI - Link with C functions compiled to wasm.
+- Macros
+- Anonymous functions
 
 - [DONE] defun - Defining functions
 - [DONE] conditionals (if)

@@ -497,6 +497,17 @@ step 3: bootstrap
 	(multiple-value-bind (val exists) (gethash name table)
 	  (when exists (return val)))))
 
+(defun get-global (name)
+  (gethash name *globals*))
+
+(defun defglobal (name)
+  (multiple-value-bind (id exists)  (gethash name *globals*)
+    (if exists
+	id
+	(let ((newid (awsm-new-global awsm-module)))
+	  (setf (gethash name *globals*) newid)
+	  newid))))
+
 (defun locals-count()
   (loop for table in *locals* sum
 	(hash-table-count table)))
@@ -544,6 +555,16 @@ step 3: bootstrap
        ;(print byte-code)
        (register-function name f)
        (compile-lisp-inner `(quote ,name))))
+    ((and (consp code) (eq (car code) 'defvar))
+     (let* ((name-dr (cdr code))
+	    (body-dr (cdr name-dr))
+	    (name (car name-dr))
+	    (body (car body-dr))
+	    (id (defglobal name)))
+       (compile-lisp-inner body)
+       (emit `(INSTR_GLOBAL_SET ,id))
+       (emit `(INSTR_GLOBAL_GET ,id))
+     ))
     ((and (consp code) (eq (car code) 'quote))
      (let ((rest (cadr code)))
        (if (symbolp rest)
@@ -582,6 +603,9 @@ step 3: bootstrap
      )
     ((and (symbolp code) (integerp (get-local code)))
      (emit `(INSTR_LOCAL_GET ,(get-local code)))
+     )
+    ((and (symbolp code) (integerp (get-global code)))
+     (emit `(INSTR_GLOBAL_GET ,(get-global code)))
      )
     (t (error "Unsupported code"))
 
@@ -631,9 +655,6 @@ step 3: bootstrap
 		     (setf buffer (cons (symbol-value part) buffer)))
 		    ((integerp part)
 		     (setf buffer (append (encode-int-leb part) buffer)))
-;(let ((header (list 1 locals-count  #x7E)))
-
-		    
 		    ((and (consp part) (eq (car part) 'func))
 		     (push (lookup-symbol (cadr part)) buffer))
 		    ((and (consp part) (eq (car part) 'symbol))
@@ -667,6 +688,7 @@ step 3: bootstrap
 (define-alien-routine "awsm_diagnostic" void (enabled boolean))
 (define-alien-routine "awsm_thread_keep_alive" void (thread (* awsm-thread)) (keep-alive int))
 (define-alien-routine "awsm_pop_i64" int (thread (* awsm-thread)))
+(define-alien-routine "awsm_new_global" int (module (* awsm-module)))
 
 (awsm-diagnostic t)
 
@@ -719,9 +741,11 @@ step 3: bootstrap
 ;(print (run-lisp '(xfunc)))
 ;(print (run-lisp '(if 1 2 (xfunc))))
 ;(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
-(run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y x)))))
-(print (run-lisp '(xfunc2 35)))
+;(print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
+;(print (run-lisp '(xfunc2 35)))
 
+(print (run-lisp '(defvar glob 10)))
+(print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
 					;(run-lisp '(rec-func -5))
 
 
