@@ -19,7 +19,7 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
 
 - Variables
  - [Done] Function Arguments
- - Locals
+ - [Done] Locals
  - Globals
 - Loops
 - Garbage Collection 

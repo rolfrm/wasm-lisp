@@ -1,4 +1,5 @@
-;(ql:quickload 'ieee-floats)
+(declaim (optimize (speed 0) (debug 3) (safety 3) (compilation-speed 0)))
+					;(ql:quickload 'ieee-floats)
 #| Superlisp compiler services
 
 A compiler infrastructure for compiling and executing lisp code on all platforms.
@@ -482,8 +483,24 @@ step 3: bootstrap
     table
     ))
 
+(defstruct compile-info
+  (local-count 0)
+  (compiled-code)
+  )
+
 ;; thread static global for storing locals
 (defvar *locals* nil)
+(defvar *compile-info* nil)
+(defvar *globals* (make-hash-table))
+(defun get-local (name)
+  (loop for table in *locals* do
+	(multiple-value-bind (val exists) (gethash name table)
+	  (when exists (return val)))))
+
+(defun locals-count()
+  (loop for table in *locals* sum
+	(hash-table-count table)))
+	
 
 (defun compile-lisp-inner(code)
   (cond
@@ -518,7 +535,7 @@ step 3: bootstrap
 		   (if (eq body-cnt 1) (car body) `(progn @,body) )
 		   locals-table
 		   ))
-	    (byte-code (print(cons 0 (gen-byte-code code))))
+	    (byte-code (print (gen-byte-code code)))
 	    (byte-code-buffer (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 	 
 	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
@@ -533,6 +550,27 @@ step 3: bootstrap
 	   (emit `(INSTR_i64_CONST (symbol ,code)))
 	 (error "Quotation not supported")))
      )
+    ((and (consp code) (eq (car code) 'let))
+     ;; let form
+     (let* ((lets-dr (cdr code))
+	   (body-dr (cdr lets-dr))
+	   (table (make-hash-table)))
+       
+       (let ((*locals* (cons table *locals*)))
+	 (loop for let-decl in (car lets-dr) do
+	       (let ((name (car let-decl))
+		     (body (cdr let-decl)))
+		 (setf (gethash name table) (locals-count))
+		 (compile-lisp-inner (car body))
+		 (emit `(INSTR_LOCAL_SET ,(get-local name)))
+		 
+		 ))
+	 (setf (compile-info-local-count *compile-info*) (max (compile-info-local-count *compile-info*) (locals-count)))
+	 
+	 (compile-lisp-inner (car body-dr))
+	 )
+
+       ))
      
     ((consp code)
      (loop for l in (cdr code) do
@@ -542,22 +580,25 @@ step 3: bootstrap
        ;(compile-lisp-inner (car code))
        )
      )
-    ((and (symbolp code) (integerp (gethash code *locals*)))
-     (emit `(INSTR_LOCAL_GET ,(gethash code *locals*)))
+    ((and (symbolp code) (integerp (get-local code)))
+     (emit `(INSTR_LOCAL_GET ,(get-local code)))
      )
     (t (error "Unsupported code"))
 
     )
-  )
+  )-
 
 (defun compile-lisp(code &optional (locals (make-hash-table)))
   (let ((buffer ())
-	(*locals* locals))
+	(*locals* (cons locals *locals*))
+	(*compile-info* (make-compile-info))
+	)
     (let ((emitf (lambda (x) (setf buffer (cons x buffer)))))
       (compile-lisp-inner code)
       (emit '(INSTR_END))
       )
-    buffer))
+    (let ((locals-count (- (compile-info-local-count *compile-info*) (hash-table-count locals))))
+      (cons `(LOCALS ,locals-count) (reverse buffer)))))
 
 (defvar symbol-map (make-hash-table))
 
@@ -574,13 +615,25 @@ step 3: bootstrap
 
 (defun gen-byte-code (code)
   (let ((buffer '()))
-    (loop for item in (reverse code) do
-	 ;(print item)
-	 (loop for part in item do
+    (loop for item in code do
+					;(print item)
+	  (cond
+	   ((and (consp item) (eq (car item) 'locals))
+	    (let ((lcount (cadr item)))
+	      (assert (integerp lcount))
+	      (push 1 buffer)
+	      (push lcount buffer)
+	      (push #x7E buffer))) ;;0x7E -> I64
+	   (t
+	    (loop for part in item do
+		
 	      (cond ((symbolp part)
 		     (setf buffer (cons (symbol-value part) buffer)))
 		    ((integerp part)
 		     (setf buffer (append (encode-int-leb part) buffer)))
+;(let ((header (list 1 locals-count  #x7E)))
+
+		    
 		    ((and (consp part) (eq (car part) 'func))
 		     (push (lookup-symbol (cadr part)) buffer))
 		    ((and (consp part) (eq (car part) 'symbol))
@@ -590,7 +643,7 @@ step 3: bootstrap
 		    ((and (consp part) (eq (car part) 'valtype) (eq (cadr part) 'i64))
 
 		     (setf buffer (cons #x73 buffer)))
-		    )))
+		    )))))
 	   
        (reverse buffer)))
 
@@ -628,9 +681,10 @@ step 3: bootstrap
 (import-function "new_symbol" 'new-symbol)
 
 (defun run-lisp (lisp-code &optional (name "anon"))
+  (declare (optimize (speed 0) (debug 3)))
   (let* (
 	 (code (compile-lisp lisp-code))
-	 (proto (cons 0 (gen-byte-code code)))
+	 (proto (gen-byte-code code))
 	 (buf (make-array (length proto) :element-type '(unsigned-byte 8) :initial-contents proto))
 	 (f (awsm-define-function awsm-module name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)))
     (let ((trd (awsm-load-thread awsm-module name)))
@@ -665,7 +719,7 @@ step 3: bootstrap
 ;(print (run-lisp '(xfunc)))
 ;(print (run-lisp '(if 1 2 (xfunc))))
 ;(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
-(run-lisp '(defun xfunc2 (x) (+ 5 x)))
+(run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y x)))))
 (print (run-lisp '(xfunc2 35)))
 
 					;(run-lisp '(rec-func -5))
