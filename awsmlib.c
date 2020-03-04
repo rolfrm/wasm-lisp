@@ -201,7 +201,12 @@ int consp(i64 a){
 int integerp(i64 a){
   return (a & TYPE_MAX) == TYPE_I64;
 }
-
+int symbolp(i64 a){
+  return (a & TYPE_MAX) == TYPE_SYMBOL;
+}
+int nilp(i64 a){
+  return (a & TYPE_MAX) == TYPE_NIL;
+}
 i64 cdr(i64 a){
   return cons.b[a >> TYPE_SHIFT];
 }
@@ -252,6 +257,12 @@ i64 cons_print(i64 a){
       cons_print(cdr(a));
       print_str(")");
     }
+  }else if(symbolp(a)){
+    print_str("sym");
+  }else if(nilp(a)){
+    print_str("nil");
+  }else{
+    print_str("??");
   }
   return mknil();
 }
@@ -302,7 +313,6 @@ i64 new_symbol(i64 symbol_length){
   i64 start_offset = symbol_offset;
   symbol_offset += unmki64(symbol_length) + 1;
   sym = sym << TYPE_SHIFT | TYPE_SYMBOL;
-  print_str("new symbol");
   memset(symbol_name + start_offset, 0, symbol_offset - start_offset);
   return sym;
 }

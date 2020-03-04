@@ -667,7 +667,7 @@ step 3: bootstrap
       (compile-lisp-inner code)
       (emit '(INSTR_END))
       )
-    (let ((locals-count (- (compile-info-local-count *compile-info*) (hash-table-count locals))))
+    (let ((locals-count (compile-info-local-count *compile-info*) ))
       (cons `(LOCALS ,locals-count) (reverse buffer)))))
 
 (defvar symbol-map (make-hash-table))
@@ -747,7 +747,7 @@ step 3: bootstrap
 (define-alien-routine "awsm_module_heap_ptr" (* t) (module (* awsm-module)))
 (define-alien-routine "memcpy" int (dst (* t)) (src (* t)) (bytes int))
 
-(awsm-diagnostic t)
+;(awsm-diagnostic t)
 
 (setf awsm-module (awsm-load-module-from-file "awsmlib.wasm"))
 (defvar addfun (byte-vector 0 INSTR_I64_ADD INSTR_END))
@@ -801,18 +801,6 @@ step 3: bootstrap
 	    (assert (eq (run-lisp i) i))
 	    )))
 
-(print (run-lisp '(cons-init)))
-;(print (run-lisp '(if 0 2 3)))
-;(print (run-lisp '(defun xfunc () 5)))
-;(print (run-lisp '(xfunc)))
-;(print (run-lisp '(if 1 2 (xfunc))))
-;(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
-;(print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
-;(print (run-lisp '(xfunc2 35)))
-
-(print (run-lisp '(defvar glob 10)))
-(print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
-
 (defun alloc-str(str-base)
   (let* (
 	(str-len (+ 1 (length str-base)))
@@ -841,7 +829,18 @@ step 3: bootstrap
 		 `(cons ,(car rest) ,(sub-chunks (cdr rest))))))
 	     (sub-chunks chunks))))
 ;    (print (list chunks (length bytes)))))
-    
+
+(print (run-lisp '(cons-init)))
+;(print (run-lisp '(if 0 2 3)))
+;(print (run-lisp '(defun xfunc () 5)))
+;(print (run-lisp '(xfunc)))
+;(print (run-lisp '(if 1 2 (xfunc))))
+;(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
+;(print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
+;(print (run-lisp '(xfunc2 35)))
+
+(print (run-lisp '(defvar glob 10)))
+(print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
 
 ;(defvar hello-world (alloc-str "Hello world!"))
 
@@ -856,9 +855,35 @@ step 3: bootstrap
     (finish-output)
     (format t "~%") 
     (run-lisp `(print (cons ,c2 (cons 5 4))))
-    (run-lisp `(print (cons 1 34)))
+    (print (run-lisp '(quote hej)))
     ;(print (gen-byte-code (compile-lisp conses)))
     ))
+
+
+(print (run-lisp '(defvar *symbols* (cons nil nil))))
+(print (run-lisp '*symbols*))
+(print (run-lisp
+	'(defun add-symbol(sym name)
+	  (setf *symbols* (cons (cons sym name) *symbols*)))))
+
+(defun build-str(str)
+  (let* ((a (alloc-str2 str))
+	 (cns (run-lisp `(set-cons-type ,a ,cons-string-type))))
+    cns))
+	
+
+(let ((a (build-str "A"))
+      (b (build-str "B"))
+      (c (build-str "C")))
+  
+  (run-lisp `(add-symbol 'A ,a))
+  (run-lisp `(add-symbol 'B ,b))
+  (run-lisp `(add-symbol 'C ,c))
+  (run-lisp `(add-symbol 'C ,c))
+  (run-lisp `(print *symbols*))
+  )
+
+
 
 ;(print (run-lisp `(let ((it 5)) (loop it (setf it 0)))))
 

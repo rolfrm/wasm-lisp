@@ -22,9 +22,9 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
  - [Done] Locals
  - [Done] Globals
 - [Done] Loops
-- [Done] Strings
+- [50% Done] Strings
+- [25% Done]Symbol Names
 - Garbage Collection 
-- Symbol Names
 - Code generation in AWSM Lisp
 - FFI - Link with C functions compiled to wasm.
 - Macros
