@@ -22,6 +22,7 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
  - [Done] Locals
  - [Done] Globals
 - [Done] Loops
+- [Done] Strings
 - Garbage Collection 
 - Symbol Names
 - Code generation in AWSM Lisp

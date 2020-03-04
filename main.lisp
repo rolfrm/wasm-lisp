@@ -49,6 +49,14 @@ step 3: bootstrap
 (defun int-from-bytes (a b c d)
   (logior a (ash b 8) (ash c 16) (ash d 24)))
 
+(defun i64-from-bytes (&rest args)
+  (let ((out 0)
+	(shift 0))
+    (loop for x in args do
+	 (setf out (logior out (ash x shift)))
+	 (incf shift 8))
+    out))
+
 (defun read-uint(reader)
   (int-from-bytes (read-byte2 reader) (read-byte2 reader)(read-byte2 reader)(read-byte2 reader)))
 
@@ -75,8 +83,7 @@ step 3: bootstrap
     (if (< chunk 128)
 	(values value 7 chunk)
 	(multiple-value-bind (v s c)
-	    (read-int-leb-part1 reader)
-	  (values (logior (ash v 7) value) (+ s 7) chunk)))))
+	    (read-int-leb-part1 reader)	  (values (logior (ash v 7) value) (+ s 7) chunk)))))
 
 (defun read-int-leb (reader)
   (multiple-value-bind (v s c)
@@ -515,9 +522,12 @@ step 3: bootstrap
 
 (defun compile-lisp-inner(code)
   (cond
-    ((null code) (error "cannot compile nil"))
+    ((eq code 'NIL) (emit '(INSTR_I64_CONST 0)))
+    ((null code) (emit '((INSTR_I64_CONST 0))))
     ((integerp code)
      (emit `(INSTR_I64_CONST (I64 ,code))))
+    ((and (consp code) (integerp (car code)) (eq (cadr code) 'cons))
+     (emit `(INSTR_I64_CONST (cons ,(car code)))))
     ((and (consp code) (eq 'if (car code)))
      (let ((test (cadr code))
 	   (a (caddr code))
@@ -646,7 +656,7 @@ step 3: bootstrap
     (t (error "Unsupported code"))
 
     )
-  )-
+  )
 
 (defun compile-lisp(code &optional (locals (make-hash-table)))
   (let ((buffer ())
@@ -673,6 +683,10 @@ step 3: bootstrap
   (assert (integerp x))
   (logior (ash x 3) 1))
 
+(defun gen-cons (x)
+  (assert (integerp x))
+  (logior (ash x 3) 3))
+
 (defun gen-byte-code (code)
   (let ((buffer '()))
     (loop for item in code do
@@ -686,17 +700,21 @@ step 3: bootstrap
 	      (push #x7E buffer))) ;;0x7E -> I64
 	   (t
 	    (loop for part in item do
-		
-	      (cond ((symbolp part)
+		 (cond
+		   ((symbolp part)
 		     (setf buffer (cons (symbol-value part) buffer)))
 		    ((integerp part)
 		     (setf buffer (append (encode-int-leb part) buffer)))
 		    ((and (consp part) (eq (car part) 'func))
 		     (push (lookup-symbol (cadr part)) buffer))
 		    ((and (consp part) (eq (car part) 'symbol))
-		     (setf buffer (append (reverse (encode-int-leb (print (get-symbol (cadr part))))) buffer)))
+		     (setf buffer (append (reverse (encode-int-leb (get-symbol (cadr part)))) buffer)))
 		    ((and (consp part) (eq (car part) 'I64))
 		     (setf buffer (append (reverse (encode-int-leb (gen-i64 (cadr part)))) buffer)))
+		    ((eq 'nil part )
+		     (setf buffer (cons 0 buffer)))
+		    ((and (consp part) (eq (car part) 'CONS))
+		     (setf buffer (append (reverse (encode-int-leb (gen-cons (cadr part)))) buffer)))
 		    ((and (consp part) (eq (car part) 'valtype) (eq (cadr part) 'i64))
 		     (setf buffer (cons #x73 buffer)))
 		    ((and (consp part) (eq (car part) 'valtype) (eq (cadr part) 'none))
@@ -717,7 +735,7 @@ step 3: bootstrap
     (struct _awsm-thread))
 
 (define-alien-routine "awsm_load_module_from_file" (* awsm-module) (file c-string))
-(define-alien-routine "awsm_define_function" int (mod (* awsm-module))
+(define-alien-routine "awsm_define_function" int (module (* awsm-module))
 		      (name c-string) (data (* unsigned-char)) (len int) (retcnt int) (argcnt int))
 (define-alien-routine "awsm_process" int (mod (* awsm-module)) (cnt int))
 (define-alien-routine "awsm_get_function" int (module (* awsm-module)) (name c-string))
@@ -726,6 +744,8 @@ step 3: bootstrap
 (define-alien-routine "awsm_thread_keep_alive" void (thread (* awsm-thread)) (keep-alive int))
 (define-alien-routine "awsm_pop_i64" int (thread (* awsm-thread)))
 (define-alien-routine "awsm_new_global" int (module (* awsm-module)))
+(define-alien-routine "awsm_module_heap_ptr" (* t) (module (* awsm-module)))
+(define-alien-routine "memcpy" int (dst (* t)) (src (* t)) (bytes int))
 
 (awsm-diagnostic t)
 
@@ -738,6 +758,13 @@ step 3: bootstrap
 (import-function "car" 'car)
 (import-function "cdr" 'cdr)
 (import-function "new_symbol" 'new-symbol)
+(import-function "falloc" 'alloc)
+(import-function "fprint" 'print-str)
+(import-function "conslen" 'conslen)
+(import-function "set_cons_type" 'set-cons-type)
+(import-function "cons_print" 'print)
+(defconstant cons-cons-type 0)
+(defconstant cons-string-type 1)
 
 (defun run-lisp (lisp-code &optional (name "anon"))
   (declare (optimize (speed 0) (debug 3)))
@@ -749,22 +776,23 @@ step 3: bootstrap
     (let ((trd (awsm-load-thread awsm-module name)))
 
       (awsm-thread-keep-alive trd 1)
-      (print code)
-      (print buf)
+      ;(print code)
+      ;(print buf)
       (finish-output)
-      (awsm-process awsm-module 10000)
-      (let ((v (awsm-pop-i64 trd)))
+      (let* ((status (awsm-process awsm-module 10000))
+	    (v (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
-	(let ((type-code (logand v #b00000111))
-	      (value (ash v -3)))
+	(when (eq status 1)
+	  (let ((type-code (logand v #b00000111))
+		(value (ash v -3)))
 
-	  (case type-code
-	    (0 'nil)
-	    (1 value)
-	    (2 (list value 'f64))
-	    (3 (list value 'cons))
-	    (4 (list value 'symbol))
-	    (otherwise (error "Unknown ~a ~a" type-code v))))))))
+	    (case type-code
+	      (0 'nil)
+	      (1 value)
+	      (2 (list value 'f64))
+	      (3 (list value 'cons))
+	      (4 (list value 'symbol))
+	      (otherwise (error "Unknown ~a ~a" type-code v)))))))))
 
 
 (defun test-leb()
@@ -784,6 +812,53 @@ step 3: bootstrap
 
 (print (run-lisp '(defvar glob 10)))
 (print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
+
+(defun alloc-str(str-base)
+  (let* (
+	(str-len (+ 1 (length str-base)))
+	(heap-alloc (run-lisp `(alloc ,str-len)))
+	(heap-ptr (sb-alien:alien-sap (awsm-module-heap-ptr awsm-module)))
+	(str (sb-sys:sap+ heap-ptr heap-alloc))
+	
+	(str2 (sb-alien:make-alien-string str-base)))
+    (memcpy str str2  str-len)
+    heap-alloc
+    ))
+
+(defun chunkify-string(str-base)
+  (let* ((bytes (sb-ext:string-to-octets str-base :external-format :utf-8))
+	 (len (length bytes))
+	 (chunks (floor (+ (/ (- len 1) 7) 1))))
+    (loop for i from 0 below chunks collect
+	 (loop for j from 0 below (min 7 (- (length bytes) (* i 7))) sum
+	      (ash (aref bytes (+ (* i 7) j)) (* j 8))))))
+    
+(defun alloc-str2(str-base)
+  (let ((chunks (chunkify-string str-base))
+	(out nil))
+    (labels ((sub-chunks (rest)
+	       (when rest
+		 `(cons ,(car rest) ,(sub-chunks (cdr rest))))))
+	     (sub-chunks chunks))))
+;    (print (list chunks (length bytes)))))
+    
+
+;(defvar hello-world (alloc-str "Hello world!"))
+
+;(run-lisp `(print-str ,hello-world))
+;(run-lisp `(print-str ,(alloc-str "HEEELO WORLD!")));hello-world))
+(let ((conses (alloc-str2 "hello world hello world!")))
+
+  (let ((c2 (run-lisp `(set-cons-type ,conses ,cons-string-type))))
+    ;(print c2)
+    (format t "~%")
+    (format t "~%")
+    (finish-output)
+    (format t "~%") 
+    (run-lisp `(print (cons ,c2 (cons 5 4))))
+    (run-lisp `(print (cons 1 34)))
+    ;(print (gen-byte-code (compile-lisp conses)))
+    ))
 
 ;(print (run-lisp `(let ((it 5)) (loop it (setf it 0)))))
 

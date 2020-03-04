@@ -45,8 +45,8 @@ void * _alloc(int bytes){
 
 void * alloc(int bytes){
   return _alloc(bytes);
-
 }
+
 
 void * memset(void * ptr, int value, u32 count){
   u8 * _ptr;
@@ -166,10 +166,14 @@ typedef enum{
   TYPE_CONS = 3,
   TYPE_SYMBOL = 4,
   TYPE_MAX = 7
-  
 }etype;
 
 #define TYPE_SHIFT 3
+
+typedef enum{
+  TYPE_CONS_CONS = 0,
+  TYPE_CONS_STRING = 1
+}econs_type;
 
 i64 mknil(){ return 0; }
 
@@ -178,6 +182,7 @@ i64 mkcons(i64 a, i64 b){
   cons.end += 1;
   cons.a[c] = a;
   cons.b[c] = b;
+  cons.type[c] = 0;
   return c << TYPE_SHIFT | TYPE_CONS;
 }
 
@@ -209,14 +214,62 @@ i64 cons_type(i64 a){
   return cons.type[a >> TYPE_SHIFT];
 }
 
+i64 set_cons_type(i64 consi, i64 new_type){
+  i64 tp = unmki64(new_type);
+  cons.type[consi >> TYPE_SHIFT] = tp;
+  return consi;
+}
+
 i64 conslen(i64 a){
   i64 c = 0;
   while(consp(a)){
     c += 1;
     a = cdr(a);
   }
-  return c;
+  return mki64(c);
 }
+
+i64 cons_print(i64 a){
+  if(integerp(a)){
+    print_i32(unmki64(a));
+  }else if(consp(a)){
+    if(cons_type(a) == TYPE_CONS_STRING){
+      print_str("\"");
+      while(consp(a)){
+	i64 x = unmki64(car(a));
+	char * xp = (char *) &x;
+	xp[7] = 0;
+	print_str(xp);
+	a = cdr(a);
+      }
+      
+      print_str("\"");
+	    
+    }else{
+      print_str("(");
+      cons_print(car(a));
+      print_str(" ");
+      cons_print(cdr(a));
+      print_str(")");
+    }
+  }
+  return mknil();
+}
+
+
+i64 cons_print2(i64 a){
+  print_str("\n\n\n\n");
+
+  if(integerp(a)){
+    print_str("PRINT INTEGER: "); 
+    print_i32(a);
+  }else if(consp(a)){
+    print_str("PRINT CONS: ");
+    
+  }
+  return mknil();
+}
+
 
 char * symbol_name;
 i64 symbol_offset;
@@ -271,6 +324,16 @@ void test_print(){
   print_i32(consp(c2)); print_str("\n");
 }
 
+
+int falloc(int bytes){
+  return mki64((int) alloc(unmki64(bytes)));
+}
+
+i64 fprint(i64 ptr){
+  char * ptr2 = (char *) unmki64(ptr);
+  print_str(ptr2);
+  return mknil();
+}
 void test_load_symbol(){
   get_symbol("libglfw.so", "glfwCreateWindow", 4, 1);
 }
