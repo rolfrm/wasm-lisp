@@ -284,9 +284,7 @@ step 3: bootstrap
        (setf (gethash (car x) *wasm-instr2*) (cadr x))
        (let ((name (intern (concatenate 'string "INSTR_" (symbol-name (car x))))))
 	 (eval `(defparameter ,name ,(cadr x))))
-       ;(print x)
        )
-       
   )
 
 (defun instr-to-int (instr)
@@ -316,7 +314,6 @@ step 3: bootstrap
 
 (defun awsm-symbol-by-name(name)
   (gethash name *awsm-symbols*))
-
 
 (defun awsm-register-function(name index etype)
   (setf (gethash name *awsm-symbols*) (cons index *awsm-func-symbol*)))
@@ -348,6 +345,7 @@ step 3: bootstrap
 	   (let ((code (read-sequence seq reader)))
 	     (setf (gethash i *awsm-code*) seq))
 	   ))))
+
 (defun awsm-read-custom-section (reader)
   (let ((length (read-uint-leb reader)))
     (loop for j from 0 below length do
@@ -379,10 +377,6 @@ step 3: bootstrap
 
 (defun awsm-push(value)
   (setf *awsm-stack* (cons value *awsm-stack*)))
-;(defun awsm-push-frame()
-  
-  
-  
 
 (defun awsm-execute-symbol (sym args)
   (destructuring-bind (index . export-type) sym
@@ -399,7 +393,7 @@ step 3: bootstrap
 		     (awsm-push 0))))
 	(print (list f code))))))
 
-(defun awsm-exec-code(awsm -context steps)
+(defun awsm-exec-code(awsm-context steps)
   (let* ( ;(startcount steps)
 	 (frame (car (awsm-context-frames awsm-context)))
 	 (reader (stack-frame-reader frame)))
@@ -409,10 +403,7 @@ step 3: bootstrap
 	     ('NOP (error "NOT SUPPORTED"))
 	     (otherwise (error "Unsupported opcode")))))))
 
-	  
-			       
 
-	       
 #| test |#
 
 (defvar reader nil)
@@ -450,21 +441,12 @@ step 3: bootstrap
   (awsm-read-custom-section reader)
 
   (make-byte-stream :bytes (vector (instr-to-int 'I32_CONST) '4))
-  
-;  (let ((sec (awsm-read-section reader)))
-;    (assert (eq sec 'custom)))
   )
-
-(defun encode-integer(value)
-  (logior (ash value 2) 1))
 
 (defvar emitf (lambda (x) ))
 (defun emit(x)
   (funcall emitf x)
   )
-
-(defun emit-instr(x)
- (format t "instr: ~a~%" x))
 
 (defvar awsm-module nil)
 
@@ -518,7 +500,16 @@ step 3: bootstrap
 (defun locals-count()
   (loop for table in *locals* sum
 	(hash-table-count table)))
-	
+
+(defparameter *interned-strings* (make-hash-table))
+(defun create-intern-string(str)
+  (multiple-value-bind (code exists)
+      (gethash str *interned-strings*)
+    (if exists
+	code
+	(let ((s (lisp-string str)))
+	  (setf (gethash str *interned-strings*) s)
+	  s))))
 
 (defun compile-lisp-inner(code)
   (cond
@@ -528,6 +519,8 @@ step 3: bootstrap
      (emit `(INSTR_I64_CONST (I64 ,code))))
     ((and (consp code) (integerp (car code)) (eq (cadr code) 'cons))
      (emit `(INSTR_I64_CONST (cons ,(car code)))))
+    ((stringp code)
+     (emit `(INSTR_I64_CONST ,(reverse (create-intern-string code)))))
     ((and (consp code) (eq 'if (car code)))
      (let ((test (cadr code))
 	   (a (caddr code))
@@ -598,8 +591,6 @@ step 3: bootstrap
 	 
 	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
 	    )
-       ;(print (list name code))
-       ;(print byte-code)
        (register-function name f)
        (compile-lisp-inner `(quote ,name))))
     ((and (consp code) (eq (car code) 'defvar))
@@ -644,7 +635,6 @@ step 3: bootstrap
 	  (compile-lisp-inner l))
      (let ((symname (car code)))
        (emit `(INSTR_CALL (func ,symname)))
-       ;(compile-lisp-inner (car code))
        )
      )
     ((and (symbolp code) (integerp (get-local code)))
@@ -675,7 +665,7 @@ step 3: bootstrap
 (defun get-symbol(sym)
   (multiple-value-bind(symid exists) (gethash sym symbol-map)
     (if exists symid
-	(let ((newsym (run-lisp '(new-symbol ))))
+	(let ((newsym (run-lisp '(new-symbol 5))))
 	  (setf (gethash sym symbol-map) (logior (ash (car newsym) 3) 4))
 	  ))))
 
@@ -752,7 +742,10 @@ step 3: bootstrap
 (setf awsm-module (awsm-load-module-from-file "awsmlib.wasm"))
 (defvar addfun (byte-vector 0 INSTR_I64_ADD INSTR_END))
 (defvar plus-add1 (awsm-get-function awsm-module "add1"))
-(import-function "add1" '+)
+(import-function "add2" '+)
+(import-function "sub2" '-)
+(import-function "div2" '/)
+(import-function "mul2" '*)
 (import-function "mkcons" 'cons)
 (import-function "init_cons" 'cons-init)
 (import-function "car" 'car)
@@ -763,6 +756,12 @@ step 3: bootstrap
 (import-function "conslen" 'conslen)
 (import-function "set_cons_type" 'set-cons-type)
 (import-function "cons_print" 'print)
+(import-function "logior" 'logior)
+(import-function "logand" 'logand)
+(import-function "ash" 'ash)
+(import-function "lisp_error" 'error)
+(import-function "stringp" 'stringp)
+
 (defconstant cons-cons-type 0)
 (defconstant cons-string-type 1)
 
@@ -827,7 +826,12 @@ step 3: bootstrap
     (labels ((sub-chunks (rest)
 	       (when rest
 		 `(cons ,(car rest) ,(sub-chunks (cdr rest))))))
-	     (sub-chunks chunks))))
+      (sub-chunks chunks))))
+
+
+(defun lisp-string(str)
+  (let* ((cons (alloc-str2 str)))
+    (run-lisp `(set-cons-type ,cons ,cons-string-type))))
 ;    (print (list chunks (length bytes)))))
 
 (print (run-lisp '(cons-init)))
@@ -846,18 +850,16 @@ step 3: bootstrap
 
 ;(run-lisp `(print-str ,hello-world))
 ;(run-lisp `(print-str ,(alloc-str "HEEELO WORLD!")));hello-world))
-(let ((conses (alloc-str2 "hello world hello world!")))
-
-  (let ((c2 (run-lisp `(set-cons-type ,conses ,cons-string-type))))
-    ;(print c2)
-    (format t "~%")
-    (format t "~%")
-    (finish-output)
-    (format t "~%") 
-    (run-lisp `(print (cons ,c2 (cons 5 4))))
-    (print (run-lisp '(quote hej)))
+(let ((c2 (lisp-string "hello world hello world!")))
+					;(print c2)
+  (format t "~%")
+  (format t "~%")
+  (finish-output)
+  (format t "~%") 
+  (run-lisp `(print (cons ,c2 (cons 5 4))))
+  (print (run-lisp '(quote hej)))
     ;(print (gen-byte-code (compile-lisp conses)))
-    ))
+  )
 
 
 (print (run-lisp '(defvar *symbols* (cons nil nil))))
@@ -881,6 +883,20 @@ step 3: bootstrap
   (run-lisp `(add-symbol 'C ,c))
   (run-lisp `(add-symbol 'C ,c))
   (run-lisp `(print *symbols*))
+  (run-lisp `(print *symbols*))
+  (run-lisp `(print "HELLO"))
+  (run-lisp `(print "OLLEH OLLEH OLLEH"))
+  (run-lisp `(print (logand 12 4)))
+  (run-lisp `(print (logior 12 4)))
+  (run-lisp `(print (ash 12 4)))
+  (run-lisp `(print (ash -12 2)))
+  (print (compile-lisp `(print (ash -12 2))))
+  
+  (print (run-lisp '(stringp "asd")))
+  ;(run-lisp '(error "fail"))
+  (run-lisp '(print (cons (* 12 4) (cons (/ 12 4) (cons (+ 12 4) (- 12 4))))))
+  (run-lisp '(print (cons (* 12 4) (cons (/ 12 4) (cons (+ 12 4) (- 12 4))))))
+  (run-lisp '(progn (print "hej") (error "unexpected!") (print "goodbye")))
   )
 
 

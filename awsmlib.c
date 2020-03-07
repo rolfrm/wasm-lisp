@@ -58,6 +58,12 @@ void * memset(void * ptr, int value, u32 count){
 int print_str(const char * x);
 void print_i32(int x);
 void print_f32(float x);
+
+// error handling. these functions causes an exception to be thrown in the interpreter.
+void awsm_error(const char * e);
+void error(const char * e){ awsm_error(e); }
+#define ASSERT(expr) if(!(expr)){error("Assertion '" #expr "' Failed");}
+
 //void print_f64(double x);
 void require_i32(int x, int y);
 int awsm_fork();
@@ -234,7 +240,7 @@ i64 conslen(i64 a){
   return mki64(c);
 }
 
-i64 cons_print(i64 a){
+i64 cons_print2(i64 a, i64 sub_print){
   if(integerp(a)){
     print_i32(unmki64(a));
   }else if(consp(a)){
@@ -251,15 +257,19 @@ i64 cons_print(i64 a){
       print_str("\"");
 	    
     }else{
-      print_str("(");
-      cons_print(car(a));
+      if(!sub_print)
+	print_str("(");
+      cons_print2(car(a), 0);
       print_str(" ");
-      cons_print(cdr(a));
-      print_str(")");
+
+      cons_print2(cdr(a), 1);
+      if(!sub_print)
+	print_str(")");
     }
   }else if(symbolp(a)){
     print_str("sym");
-  }else if(nilp(a)){
+    print_i32(a >> TYPE_SHIFT);
+  }else if(nilp(a) && !sub_print){
     print_str("nil");
   }else{
     print_str("??");
@@ -267,20 +277,11 @@ i64 cons_print(i64 a){
   return mknil();
 }
 
-
-i64 cons_print2(i64 a){
-  print_str("\n\n\n\n");
-
-  if(integerp(a)){
-    print_str("PRINT INTEGER: "); 
-    print_i32(a);
-  }else if(consp(a)){
-    print_str("PRINT CONS: ");
-    
-  }
+i64 cons_print(i64 a){
+  cons_print2(a, 0);
+  print_str("\n");
   return mknil();
 }
-
 
 char * symbol_name;
 i64 symbol_offset;
@@ -317,6 +318,59 @@ i64 new_symbol(i64 symbol_length){
   return sym;
 }
 
+
+i64 new_symbol_named(i64 sym_name){
+  ASSERT(consp(sym_name));
+  ASSERT(cons_type(sym_name) == TYPE_CONS_STRING);
+  i64 offset = new_symbol(mki64(sizeof(i64)));
+  i64 * ptr = (i64 *) (symbol_name + offset);
+  ptr[0] = sym_name;
+
+  return offset << TYPE_SHIFT | TYPE_SYMBOL;
+}
+
+i64 logior(i64 a, i64 b){
+  a = unmki64(a);
+  b = unmki64(b);
+  return mki64(a | b);
+}
+
+i64 logand(i64 a, i64 b){
+  a = unmki64(a);
+  b = unmki64(b);
+  return mki64(a & b);
+}
+
+i64 ash(i64 a, i64 b){
+  a = unmki64(a);
+  b = unmki64(b);
+  if( b < 0)
+    return mki64(a >> -b);
+  return mki64(a << b);
+}
+
+i64 stringp(i64 a){
+  return mki64(consp(a) && cons_type(a) == TYPE_CONS_STRING);
+}
+
+void string_to_buffer(i64 str, char * buf){
+  while(consp(str)){
+    i64 chunk = car(str);
+    ((i64 *) buf)[0] = unmki64(chunk);
+    buf += 7;
+    str = cdr(str);
+  }
+}
+
+void lisp_error(i64 err){
+  static char buffer_error[100];
+ 
+  ASSERT(stringp(err));
+  string_to_buffer(err, buffer_error);
+  error(buffer_error);
+
+}
+
 void test_print(){
   print_str("test?\n");
 
@@ -344,39 +398,8 @@ i64 fprint(i64 ptr){
   print_str(ptr2);
   return mknil();
 }
-void test_load_symbol(){
-  get_symbol("libglfw.so", "glfwCreateWindow", 4, 1);
-}
 
-void test_load_symbol1(void * arg){
-  test_print();
-  print_i32((int) arg);
-  print_str("done 1\n");
-  yield();
-  print_str("done 2\n");
-  yield();
-  print_str("done 3\n");
-      
-}
-void (*testthing)(void * a);
-void test_new_coroutine(){
-  if(testthing == 0) testthing = test_load_symbol1;
-  
-  for(int i = 0 ; i < 50; i++)
-    new_coroutine(test_load_symbol1, (void*)i);
-  print_str("done first thread\n");
-}
-
-void test_new_coroutine2(){
-  if(testthing == 0) testthing = test_load_symbol1;
-  
-  //new_coroutine(main_forked, 0);
-  testthing(0);
-  //new_coroutine(test_load_symbol1, 0);
-  //new_coroutine(awsm_fork, 0);
-  print_str("???\n");
-}
-
-i64 add1(i64 a, i64 b){
-  return mki64(unmki64(a) + unmki64(b));
-}
+i64 add2(i64 a, i64 b){ return mki64(unmki64(a) + unmki64(b)); }
+i64 sub2(i64 a, i64 b){ return mki64(unmki64(a) - unmki64(b)); }
+i64 mul2(i64 a, i64 b){ return mki64(unmki64(a) * unmki64(b)); }
+i64 div2(i64 a, i64 b){ return mki64(unmki64(a) / unmki64(b)); }

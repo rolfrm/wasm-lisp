@@ -22,14 +22,25 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
  - [Done] Locals
  - [Done] Globals
 - [Done] Loops
-- [50% Done] Strings
+- [Done] Strings
 - [25% Done]Symbol Names
+- Alloc implementation
+- Bitwise
+- basic math
+- Error handling
+ - Stack imbalance
+ - type checks
+ - [Done ]errors / fault: 
+ - asserts
+
 - Garbage Collection 
 - Code generation in AWSM Lisp
 - FFI - Link with C functions compiled to wasm.
 - Macros
 - Anonymous functions
 
+
+
 - [DONE] defun - Defining functions
 - [DONE] conditionals (if)
-  
+
