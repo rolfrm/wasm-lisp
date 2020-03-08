@@ -576,7 +576,7 @@ step 3: bootstrap
 		   (if (eq body-cnt 1) (car body) `(progn @,body) )
 		   locals-table
 		   ))
-	    (byte-code (print (gen-byte-code code)))
+	    (byte-code (gen-byte-code code))
 	    (byte-code-buffer (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 	 
 	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
@@ -596,7 +596,7 @@ step 3: bootstrap
     ((and (consp code) (eq (car code) 'quote))
      (let ((rest (cadr code)))
        (if (symbolp rest)
-	   (emit `(INSTR_i64_CONST (symbol ,code)))
+	   (emit `(INSTR_I64_CONST (symbol ,(cadr code))))
 	 (error "Quotation not supported")))
      )
     ((and (consp code) (eq (car code) 'let))
@@ -653,10 +653,13 @@ step 3: bootstrap
 (defvar symbol-map (make-hash-table))
 
 (defun get-symbol(sym)
+  (declare (symbol sym))
   (multiple-value-bind(symid exists) (gethash sym symbol-map)
     (if exists symid
-	(let ((newsym (run-lisp '(new-symbol 5))))
-	  (setf (gethash sym symbol-map) (logior (ash (car newsym) 3) 4))
+	(let* ((newsym (run-lisp '(new-symbol 5)))
+	      (v (logior (ash (car newsym) 3) 4)))
+	  (setf (gethash sym symbol-map) v)
+	  v
 	  ))))
 
 (defun gen-i64 (x)
@@ -761,8 +764,7 @@ step 3: bootstrap
   (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 
 (defun run-lisp (lisp-code)
-  (declare (optimize (speed 0) (debug 3))
-	   (cons lisp-code))
+  (declare (optimize (speed 0) (debug 3)))
   (let* ((code (compile-lisp lisp-code))
 	 (proto (gen-byte-code code))
 	 (buf (make-byte-code-array proto))
@@ -879,10 +881,16 @@ step 3: bootstrap
     (let ((fcnid (awsm-define-function awsm-module (symbol-name (symbol-c-name name)) (sb-sys:vector-sap bytecode) (array-total-size bytecode) retcnt argcnt)))
       (register-function name fcnid))))
 
-(def-asm-fcn 'not '((LOCALS 0) (INSTR_I64_CONST 0) (INSTR_I64_EQ)
+(def-asm-fcn 'not '((LOCALS 0) (INSTR_LOCAL_GET 0) (INSTR_I64_CONST 0) (INSTR_I64_EQ)
 		    (INSTR_I64_CONST 3) (INSTR_I64_SHL) ; if 0 -> (nil 0). if != 0 -> t
 		    (INSTR_END)) 1 1)
 
+(def-asm-fcn 'eq '((LOCALS 0)
+		   (INSTR_LOCAL_GET 0) ; get 'x'
+		   (INSTR_LOCAL_GET 1) ; get 'y'
+		   (INSTR_I64_EQ)
+		   (INSTR_I64_CONST 3) (INSTR_I64_SHL) ; if 0 -> (nil 0). if != 0 -> t
+		   (INSTR_END)) 1 2)
 
 ;(print (run-lisp '(defun loop-print ()
 ;		   (let ((it 3))
@@ -916,5 +924,10 @@ step 3: bootstrap
   (run-lisp '(print (cons (* 12 4) (cons (/ 12 4) (cons (+ 12 4) (- 12 4))))))
   ;(run-lisp '(progn (print "hej") (error "unexpected!") (print "goodbye")))
   (run-lisp '(print (new-symbol-named "hey")))
+  (run-lisp '(eq 1 2))
+  (run-lisp '(eq 2 2))
+  (run-lisp '(eq 'a 'a))
+  ;(run-lisp '(print (cons "hello" 'bbc)))
+    
   )
 
