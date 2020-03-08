@@ -231,6 +231,16 @@ i64 set_cons_type(i64 consi, i64 new_type){
   return consi;
 }
 
+
+i64 stringp(i64 a){
+  return mki64(consp(a) && cons_type(a) == TYPE_CONS_STRING);
+}
+
+
+char * symbol_name;
+i64 symbol_offset;
+i64 symbol_capacity;
+
 i64 conslen(i64 a){
   i64 c = 0;
   while(consp(a)){
@@ -245,7 +255,6 @@ i64 cons_print2(i64 a, i64 sub_print){
     print_i32(unmki64(a));
   }else if(consp(a)){
     if(cons_type(a) == TYPE_CONS_STRING){
-      print_str("\"");
       while(consp(a)){
 	i64 x = unmki64(car(a));
 	char * xp = (char *) &x;
@@ -253,9 +262,6 @@ i64 cons_print2(i64 a, i64 sub_print){
 	print_str(xp);
 	a = cdr(a);
       }
-      
-      print_str("\"");
-	    
     }else{
       if(!sub_print)
 	print_str("(");
@@ -267,8 +273,14 @@ i64 cons_print2(i64 a, i64 sub_print){
 	print_str(")");
     }
   }else if(symbolp(a)){
-    print_str("sym");
-    print_i32(a >> TYPE_SHIFT);
+    a = a >> TYPE_SHIFT;
+    i64 * consptr = (i64 *) (symbol_name + a);
+    if(stringp(consptr[0])){
+      cons_print2(consptr[0], 0);
+    }else{
+      print_str("sym");
+      print_i32(a);
+    }
   }else if(nilp(a) && !sub_print){
     print_str("nil");
   }else{
@@ -283,9 +295,6 @@ i64 cons_print(i64 a){
   return mknil();
 }
 
-char * symbol_name;
-i64 symbol_offset;
-i64 symbol_capacity;
 
 int init_cons(){
   if(cons.a != 0) return 0;
@@ -349,9 +358,6 @@ i64 ash(i64 a, i64 b){
   return mki64(a << b);
 }
 
-i64 stringp(i64 a){
-  return mki64(consp(a) && cons_type(a) == TYPE_CONS_STRING);
-}
 
 void string_to_buffer(i64 str, char * buf){
   while(consp(str)){

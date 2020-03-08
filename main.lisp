@@ -751,6 +751,7 @@ step 3: bootstrap
 (import-function "car" 'car)
 (import-function "cdr" 'cdr)
 (import-function "new_symbol" 'new-symbol)
+(import-function "new_symbol_named" 'new-symbol-named)
 (import-function "falloc" 'alloc)
 (import-function "fprint" 'print-str)
 (import-function "conslen" 'conslen)
@@ -896,7 +897,8 @@ step 3: bootstrap
   ;(run-lisp '(error "fail"))
   (run-lisp '(print (cons (* 12 4) (cons (/ 12 4) (cons (+ 12 4) (- 12 4))))))
   (run-lisp '(print (cons (* 12 4) (cons (/ 12 4) (cons (+ 12 4) (- 12 4))))))
-  (run-lisp '(progn (print "hej") (error "unexpected!") (print "goodbye")))
+  ;(run-lisp '(progn (print "hej") (error "unexpected!") (print "goodbye")))
+  (run-lisp '(print (new-symbol-named "hey")))
   )
 
 
