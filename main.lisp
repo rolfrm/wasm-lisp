@@ -393,16 +393,6 @@ step 3: bootstrap
 		     (awsm-push 0))))
 	(print (list f code))))))
 
-(defun awsm-exec-code(awsm-context steps)
-  (let* ( ;(startcount steps)
-	 (frame (car (awsm-context-frames awsm-context)))
-	 (reader (stack-frame-reader frame)))
-    (loop for step from 0 below steps
-	 (let ((instr (read-instr reader)))
-	   (case instr
-	     ('NOP (error "NOT SUPPORTED"))
-	     (otherwise (error "Unsupported opcode")))))))
-
 
 #| test |#
 
@@ -766,28 +756,29 @@ step 3: bootstrap
 (defconstant cons-cons-type 0)
 (defconstant cons-string-type 1)
 
-(defun run-lisp (lisp-code &optional (name "anon"))
-  (declare (optimize (speed 0) (debug 3)))
-  (let* (
-	 (code (compile-lisp lisp-code))
-	 (proto (gen-byte-code code))
-	 (buf (make-array (length proto) :element-type '(unsigned-byte 8) :initial-contents proto))
-	 (f (awsm-define-function awsm-module name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)))
-    (let ((trd (awsm-load-thread awsm-module name)))
+(defun make-byte-code-array(byte-code)
+  (declare ((cons (unsigned-byte 8)) byte-code))
+  (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 
+(defun run-lisp (lisp-code)
+  (declare (optimize (speed 0) (debug 3))
+	   (cons lisp-code))
+  (let* ((code (compile-lisp lisp-code))
+	 (proto (gen-byte-code code))
+	 (buf (make-byte-code-array proto))
+	 (name "repl"))
+    
+    (awsm-define-function awsm-module name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)
+    (let ((trd (awsm-load-thread awsm-module name)))
       (awsm-thread-keep-alive trd 1)
-      ;(print code)
-      ;(print buf)
-      (finish-output)
       (let* ((status (awsm-process awsm-module 10000))
-	    (v (awsm-pop-i64 trd)))
+	     (v (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
 	(when (eq status 1)
 	  (let ((type-code (logand v #b00000111))
 		(value (ash v -3)))
-
 	    (case type-code
-	      (0 'nil)
+	      (0 (if (eq value 0) 'nil t))
 	      (1 value)
 	      (2 (list value 'f64))
 	      (3 (list value 'cons))
@@ -807,7 +798,6 @@ step 3: bootstrap
 	(heap-alloc (run-lisp `(alloc ,str-len)))
 	(heap-ptr (sb-alien:alien-sap (awsm-module-heap-ptr awsm-module)))
 	(str (sb-sys:sap+ heap-ptr heap-alloc))
-	
 	(str2 (sb-alien:make-alien-string str-base)))
     (memcpy str str2  str-len)
     heap-alloc
@@ -841,8 +831,8 @@ step 3: bootstrap
 ;(print (run-lisp '(xfunc)))
 ;(print (run-lisp '(if 1 2 (xfunc))))
 ;(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
-;(print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
-;(print (run-lisp '(xfunc2 35)))
+(print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
+(print (run-lisp '(xfunc2 35)))
 
 (print (run-lisp '(defvar glob 10)))
 (print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
@@ -873,7 +863,34 @@ step 3: bootstrap
   (let* ((a (alloc-str2 str))
 	 (cns (run-lisp `(set-cons-type ,a ,cons-string-type))))
     cns))
-	
+
+(defvar *symbol-cnames* (make-hash-table ))
+(defun symbol-c-name (sym)
+  (declare (symbol sym))
+  (multiple-value-bind (cname exists) (gethash sym *symbol-cnames*)
+    (if exists cname
+	(let ((newname (gensym "ASM")))
+	  (setf (gethash sym *symbol-cnames*) newname)
+	  newname))))
+
+(defun def-asm-fcn (name code retcnt argcnt)
+  (declare (symbol name) (integer argcnt retcnt) ((cons cons) code))
+  (let ((bytecode (make-byte-code-array (gen-byte-code code))))
+    (let ((fcnid (awsm-define-function awsm-module (symbol-name (symbol-c-name name)) (sb-sys:vector-sap bytecode) (array-total-size bytecode) retcnt argcnt)))
+      (register-function name fcnid))))
+
+(def-asm-fcn 'not '((LOCALS 0) (INSTR_I64_CONST 0) (INSTR_I64_EQ)
+		    (INSTR_I64_CONST 3) (INSTR_I64_SHL) ; if 0 -> (nil 0). if != 0 -> t
+		    (INSTR_END)) 1 1)
+
+
+;(print (run-lisp '(defun loop-print ()
+;		   (let ((it 3))
+;		     (loop (not (eq it 0)
+
+(defun print-wasm(wasm)
+  (loop for x in wasm do
+       (print x)))
 
 (let ((a (build-str "A"))
       (b (build-str "B"))
@@ -900,33 +917,4 @@ step 3: bootstrap
   ;(run-lisp '(progn (print "hej") (error "unexpected!") (print "goodbye")))
   (run-lisp '(print (new-symbol-named "hey")))
   )
-
-
-
-;(print (run-lisp `(let ((it 5)) (loop it (setf it 0)))))
-
-;; (loop (test) (do))
-;; LOOP <type>
-;;  TEST
-;;  BR_IF
-;;  [DO DO DO]
-;; END
-
-
-					;(run-lisp '(rec-func -5))
-
-
-					;(print (run-lisp '(if 1 2 3)))
-;(print cons-init)
-;(print (ash (run-lisp '5) -2))
-;(print (ash (run-lisp '(+ 1 (+ 3 (+ 4 5)))) -2))
-;(print (ash (run-lisp '(cdr (car (cons (cons 3 5) 4)))) -2))
-;(run-lisp '(new-symbol 10))
-;(print (run-lisp '(+ 1 2)))
-;(print (run-lisp '(+ (+ 2 3) (+ 1 0))))
-;(print (run-lisp '1))
-;(print (ash (run-lisp '(+ 1 3)) -2))
-;(print (ash (run-lisp '(cons 1 3)) -2))
-;(print (ash (run-lisp '(cons 1 3)) -2))
-;)
 

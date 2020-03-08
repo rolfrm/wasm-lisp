@@ -166,6 +166,8 @@ struct {
 }cons;
 
 typedef enum{
+  // nil type. for all bits = 0 this means nil
+  // for bits != 0 this means t
   TYPE_NIL = 0,
   TYPE_I64 = 1,
   TYPE_F64 = 2,
@@ -251,10 +253,13 @@ i64 conslen(i64 a){
 }
 
 i64 cons_print2(i64 a, i64 sub_print){
+  static int printing_str_with_quotes = 1;
   if(integerp(a)){
     print_i32(unmki64(a));
   }else if(consp(a)){
     if(cons_type(a) == TYPE_CONS_STRING){
+      if(printing_str_with_quotes)
+	print_str("\"");
       while(consp(a)){
 	i64 x = unmki64(car(a));
 	char * xp = (char *) &x;
@@ -262,6 +267,9 @@ i64 cons_print2(i64 a, i64 sub_print){
 	print_str(xp);
 	a = cdr(a);
       }
+      if(printing_str_with_quotes)      
+	print_str("\"");
+	    
     }else{
       if(!sub_print)
 	print_str("(");
@@ -276,7 +284,9 @@ i64 cons_print2(i64 a, i64 sub_print){
     a = a >> TYPE_SHIFT;
     i64 * consptr = (i64 *) (symbol_name + a);
     if(stringp(consptr[0])){
+      printing_str_with_quotes = 0;
       cons_print2(consptr[0], 0);
+      printing_str_with_quotes = 1;
     }else{
       print_str("sym");
       print_i32(a);
