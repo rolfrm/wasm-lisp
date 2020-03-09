@@ -656,7 +656,7 @@ step 3: bootstrap
   (declare (symbol sym))
   (multiple-value-bind(symid exists) (gethash sym symbol-map)
     (if exists symid
-	(let* ((newsym (run-lisp '(new-symbol 5)))
+	(let* ((newsym (run-lisp `(new-symbol-named ,(symbol-name sym))))
 	      (v (logior (ash (car newsym) 3) 4)))
 	  (setf (gethash sym symbol-map) v)
 	  v
@@ -855,7 +855,7 @@ step 3: bootstrap
   )
 
 
-(print (run-lisp '(defvar *symbols* (cons nil nil))))
+(print (run-lisp '(defvar *symbols* nil)))
 (print (run-lisp '*symbols*))
 (print (run-lisp
 	'(defun add-symbol(sym name)
@@ -927,7 +927,5 @@ step 3: bootstrap
   (run-lisp '(eq 1 2))
   (run-lisp '(eq 2 2))
   (run-lisp '(eq 'a 'a))
-  ;(run-lisp '(print (cons "hello" 'bbc)))
-    
+  (run-lisp '(print (cons "hello" (cons 'bbc 'ccdd))))
   )
-
