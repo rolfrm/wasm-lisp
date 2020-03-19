@@ -58,6 +58,8 @@ step 3: bootstrap compiler in wasm itself.
 		  (read-byte2 reader) (read-byte2 reader)(read-byte2 reader)(read-byte2 reader)))
 
 
+;;; SECTION Utils / LEB128
+
 (defun read-uint-leb(reader)
   (let ((v 0)
 	(shift 0))
@@ -116,7 +118,6 @@ step 3: bootstrap compiler in wasm itself.
 (defun char-byte(char)
   (coerce (char-int char) 'unsigned-byte))
 
-
 ;; f64/32 not yet supported
 ;(defun read-f64(reader)
 ;  (let ((integer (read-uint64 reader)))
@@ -126,7 +127,13 @@ step 3: bootstrap compiler in wasm itself.
 ;  (let ((integer (read-uint reader)))
 ;    (ieee-floats:decode-float32 integer)))
 
+;;; SECTION Utils
 
+(defun byte-vector (&rest args)
+  (make-array (length args) :element-type '(unsigned-byte 8) :initial-contents args))
+
+
+;;; Section Wasm / Load
 
 (defun load-wasm-reader(file)
   (let ((f (open file :direction :input :element-type 'unsigned-byte)))
@@ -471,6 +478,7 @@ step 3: bootstrap compiler in wasm itself.
 (defvar *locals* nil)
 (defvar *compile-info* nil)
 (defvar *globals* (make-hash-table))
+
 (defun get-local (name)
   (loop for table in *locals* do
 	(multiple-value-bind (val exists) (gethash name table)
@@ -660,15 +668,15 @@ step 3: bootstrap compiler in wasm itself.
     (let ((locals-count (compile-info-local-count *compile-info*) ))
       (cons `(LOCALS ,locals-count) (reverse buffer)))))
 
-(defvar symbol-map (make-hash-table))
+(defvar *symbol-map* (make-hash-table))
 
 (defun get-symbol(sym)
   (declare (symbol sym))
-  (multiple-value-bind(symid exists) (gethash sym symbol-map)
+  (multiple-value-bind(symid exists) (gethash sym *symbol-map*)
     (if exists symid
 	(let* ((newsym (run-lisp `(new-symbol-named ,(symbol-name sym))))
 	      (v (logior (ash (car newsym) 3) 4)))
-	  (setf (gethash sym symbol-map) v)
+	  (setf (gethash sym *symbol-map*) v)
 	  v
 	  ))))
 
@@ -718,10 +726,7 @@ step 3: bootstrap compiler in wasm itself.
 	   
        (reverse buffer)))
 
-(defun byte-vector (&rest args)
-  (make-array (length args) :element-type '(unsigned-byte 8) :initial-contents args)) ;(list 0 INSTR_I64_CONST 15 INSTR_END))
 
-;(defun test2()
 (load-shared-object "../wasmrun/libawsm.so")
 (define-alien-type awsm-module
     (struct _awsm-module))
@@ -748,8 +753,6 @@ step 3: bootstrap compiler in wasm itself.
 ;(awsm-diagnostic t)
 
 (setf *awsm-module* (awsm-load-module-from-file "awsmlib.wasm"))
-(defvar addfun (byte-vector 0 INSTR_I64_ADD INSTR_END))
-(defvar plus-add1 (awsm-get-function *awsm-module* "add1"))
 (import-function "add2" '+)
 (import-function "sub2" '-)
 (import-function "div2" '/)
@@ -778,8 +781,18 @@ step 3: bootstrap compiler in wasm itself.
   (declare ((cons (unsigned-byte 8)) byte-code))
   (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 
+(defun awsm-value-to-lisp (v)
+  (let ((type-code (logand v #b00000111))
+	(value (ash v -3)))
+	(case type-code
+	  (0 (if (eq value 0) 'nil t))
+	  (1 value)
+	  (2 (list value 'f64))
+	  (3 (list value 'cons))
+	  (4 (list value 'symbol))
+	  (otherwise (error "Unknown ~a ~a" type-code v)))))
+
 (defun run-lisp (lisp-code)
-  (declare (optimize (speed 0) (debug 3)))
   (let* ((code (compile-lisp lisp-code))
 	 (proto (gen-byte-code code))
 	 (buf (make-byte-code-array proto))
@@ -789,27 +802,12 @@ step 3: bootstrap compiler in wasm itself.
     (let ((trd (awsm-load-thread *awsm-module* name)))
       (awsm-thread-keep-alive trd 1)
       (let* ((status (awsm-process *awsm-module* 10000))
-	     (v (awsm-pop-i64 trd))
-	     (v2 (awsm-pop-i64 trd)))
+	     (v (when (eq status 1) (awsm-pop-i64 trd))))
 	(awsm-thread-keep-alive trd 0)
 	(let ((err (awsm-thread-error trd)))
 	  (when err (error err)))
-	;(print (list status (awsm-thread-error trd)))
 	(when (eq status 1)
-	  (let ((type-code (logand v #b00000111))
-		(value (ash v -3))
-		(err (awsm-thread-error trd)))
-	    
-	    (when err
-	      (error error))
-	    (case type-code
-	      (0 (if (eq value 0) 'nil t))
-	      (1 value)
-	      (2 (list value 'f64))
-	      (3 (list value 'cons))
-	      (4 (list value 'symbol))
-	      (otherwise (error "Unknown ~a ~a" type-code v)))))))))
-
+	  (awsm-value-to-lisp v))))))
 
 (defun test-leb()
   (loop for scale in '(1 10 100 1000 10000) do
@@ -848,14 +846,14 @@ step 3: bootstrap compiler in wasm itself.
 (defun lisp-string(str)
   (let* ((cons (alloc-str2 str)))
     (run-lisp `(set-cons-type ,cons ,cons-string-type))))
-;    (print (list chunks (length bytes)))))
 
 (print (run-lisp '(cons-init)))
-;(print (run-lisp '(if 0 2 3)))
-;(print (run-lisp '(defun xfunc () 5)))
-;(print (run-lisp '(xfunc)))
-;(print (run-lisp '(if 1 2 (xfunc))))
-;(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ x 1)))))
+(print (run-lisp '(if 1 2 3)))
+(print (run-lisp '(defun xfunc () 5)))
+(print (run-lisp '(xfunc)))
+(print (run-lisp '(if 0 2 (xfunc))))
+(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ (print x) 1)))))
+(print (run-lisp '(rec-func -5)))
 (print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
 (print (run-lisp '(xfunc2 35)))
 
@@ -1024,3 +1022,4 @@ step 3: bootstrap compiler in wasm itself.
   )
 
 (print (run-lisp '(if (is-type 1 1) 40 20)))
+(print (run-lisp '(print 1)))

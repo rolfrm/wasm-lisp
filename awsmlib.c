@@ -302,7 +302,7 @@ i64 cons_print2(i64 a, i64 sub_print){
 i64 cons_print(i64 a){
   cons_print2(a, 0);
   print_str("\n");
-  return mknil();
+  return a;
 }
 
 
