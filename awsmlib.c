@@ -1,7 +1,5 @@
 //compile with clang: clang-9 --target=wasm32 -nostdlib -Wl,--export-all -Wl,--no-entry -O3 -Wl,-no-gc-sections awsmlib.c -Wl,--allow-undefined  -o awsmlib.wasm 
 
-void * get_symbol(const char * module, const char * symbol, unsigned int argcount, unsigned int retcount);
-
 typedef long long i64;
 typedef unsigned char u8;
 typedef unsigned long u32;

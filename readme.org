@@ -39,8 +39,6 @@ The emitted byte code should be conformant with WebAssembly VMs, but WebAssembly
 - Macros
 - Anonymous functions
 
-
-
 - [DONE] defun - Defining functions
 - [DONE] conditionals (if)
 

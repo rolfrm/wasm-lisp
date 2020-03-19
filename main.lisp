@@ -15,7 +15,7 @@ step 3: bootstrap compiler in wasm itself.
 
 (in-package :awsm)
 
-;;; Section Utils / byte stream
+;;;; Section Utils / byte stream
 
 ;; Reads bytes from an array or stream.
 (defstruct byte-stream
@@ -37,7 +37,7 @@ step 3: bootstrap compiler in wasm itself.
       (byte-stream-read-byte str)
     (cl:read-byte str eof-error-p eof-value)))
 
-;;; Section Utils / bits
+;;;; Section Utils / bits
 
 (defun int-from-bytes (a b c d)
   (logior a (ash b 8) (ash c 16) (ash d 24)))
@@ -590,7 +590,7 @@ step 3: bootstrap compiler in wasm itself.
 		   locals-table
 		   ))
 	    (byte-code (gen-byte-code code))
-	    (byte-code-buffer (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
+	    (byte-code-buffer (apply #'byte-vector byte-code))
 	 
 	    (f (awsm-define-function *awsm-module* name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
 	    )
@@ -744,13 +744,13 @@ step 3: bootstrap compiler in wasm itself.
 (define-alien-routine "awsm_load_thread" (* awsm-thread) (module (* awsm-module)) (symbol c-string))
 (define-alien-routine "awsm_diagnostic" void (enabled boolean))
 (define-alien-routine "awsm_thread_keep_alive" void (thread (* awsm-thread)) (keep-alive int))
-(define-alien-routine "awsm_pop_i64" int (thread (* awsm-thread)))
+(define-alien-routine "awsm_pop_i64" long-long (thread (* awsm-thread)))
 (define-alien-routine "awsm_new_global" int (module (* awsm-module)))
 (define-alien-routine "awsm_module_heap_ptr" (* t) (module (* awsm-module)))
 (define-alien-routine "memcpy" int (dst (* t)) (src (* t)) (bytes int)) 
 (define-alien-routine "awsm_thread_error" c-string (thread (* awsm-thread))) 
 
-;(awsm-diagnostic t)
+(awsm-diagnostic t)
 
 (setf *awsm-module* (awsm-load-module-from-file "awsmlib.wasm"))
 (import-function "add2" '+)
@@ -774,6 +774,8 @@ step 3: bootstrap compiler in wasm itself.
 (import-function "lisp_error" 'error)
 (import-function "stringp" 'stringp)
 
+(import-function "cons_type" '+cons-type+)
+
 (defconstant cons-cons-type 0)
 (defconstant cons-string-type 1)
 
@@ -782,7 +784,7 @@ step 3: bootstrap compiler in wasm itself.
   (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 
 (defun awsm-value-to-lisp (v)
-  (let ((type-code (logand v #b00000111))
+  (let ((type-code (logand v #b111))
 	(value (ash v -3)))
 	(case type-code
 	  (0 (if (eq value 0) 'nil t))
@@ -803,6 +805,7 @@ step 3: bootstrap compiler in wasm itself.
       (awsm-thread-keep-alive trd 1)
       (let* ((status (awsm-process *awsm-module* 10000))
 	     (v (when (eq status 1) (awsm-pop-i64 trd))))
+	
 	(awsm-thread-keep-alive trd 0)
 	(let ((err (awsm-thread-error trd)))
 	  (when err (error err)))
@@ -860,6 +863,7 @@ step 3: bootstrap compiler in wasm itself.
 (print (run-lisp '(defvar glob 10)))
 (print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
 (run-lisp '(+ 1 2))
+(print (run-lisp '(* 1000000 1000000)))
 
 ;(defvar hello-world (alloc-str "Hello world!"))
 
@@ -904,24 +908,45 @@ step 3: bootstrap compiler in wasm itself.
     (let ((fcnid (awsm-define-function *awsm-module* (symbol-name (symbol-c-name name)) (sb-sys:vector-sap bytecode) (array-total-size bytecode) retcnt argcnt)))
       (register-function name fcnid argcnt))))
 
-(def-asm-fcn 'not '((LOCALS 0) (INSTR_LOCAL_GET 0) (INSTR_I64_CONST 0) (INSTR_I64_EQ)
-		    (INSTR_I64_CONST 3) (INSTR_I64_SHL) ; if 0 -> (nil 0). if != 0 -> t
+;;; NOT
+;; if the argument is not nil, return nil
+;; otherwise return t
+(def-asm-fcn 'not '((LOCALS 0)
+		    (INSTR_LOCAL_GET 0)
+		    ;; nil is just 0, compare with this
+		    (INSTR_I64_CONST 0) 
+		    (INSTR_I64_EQ)
+		    ;; now 0 or 1 is on the stack
+		    ;; shift it up 3 to crreate a nil type, the number '1' of type nil is 't'.
+		    (INSTR_I64_CONST 3) 
+		    (INSTR_I64_SHL) 
 		    (INSTR_END)) 1 1)
 
+;;; EQ
+;; return t if the values are equal.
+;; otherwise nil
 (def-asm-fcn 'eq '((LOCALS 0)
+		   ;; compare x and y
 		   (INSTR_LOCAL_GET 0) ; get 'x'
 		   (INSTR_LOCAL_GET 1) ; get 'y'
 		   (INSTR_I64_EQ)
-		   (INSTR_I64_CONST 3) (INSTR_I64_SHL) ; if 0 -> (nil 0). if != 0 -> t
+		   ;; As with 'not',
+		   ;; shift number up by 3 to turn 1/0 into a nil type.
+		   (INSTR_I64_CONST 3)
+		   (INSTR_I64_SHL) 
 		   (INSTR_END)) 1 2)
+
+;;; is-type
+;; compare the type header of a value with another value.
+;; todo: this could be implemented simpler by just implementing a get-type function.
 (def-asm-fcn 'is-type '((locals 0)
-		      (INSTR_LOCAL_GET 0)
-		      (INSTR_I64_CONST 7)
-		      (INSTR_I64_AND)
-		      (INSTR_LOCAL_GET 1)
-		      (INSTR_I64_CONST 3)
-		      (INSTR_I64_SHR_S)
-		      (INSTR_I64_EQ)
+			(INSTR_LOCAL_GET 0)
+			(INSTR_I64_CONST 7)
+			(INSTR_I64_AND)
+			(INSTR_LOCAL_GET 1)
+			(INSTR_I64_CONST 3)
+			(INSTR_I64_SHR_S)
+			(INSTR_I64_EQ)
 			(INSTR_I64_CONST 3)
 			(INSTR_I64_SHL)
 			(INSTR_END)
@@ -944,40 +969,64 @@ step 3: bootstrap compiler in wasm itself.
 (run-lisp `(defun consp (x)
 	    (is-type x ,*awsm-cons-type*)))
 
+;;; Cons-Type
+;; This function gets the type of a cons.
+;; a various cons types can be specified
+;; the cons type is returned as an integer.
+(def-asm-fcn 'cons-type `((locals 0)
+			  ;;Get the type header of the argument
+			  (INSTR_LOCAL_GET 0)
+			  (INSTR_I64_CONST 7)
+			  (INSTR_I64_AND)
+
+			  ;; check if its a cons type
+			  (INSTR_I64_CONST ,*awsm-cons-type*)
+			  (INSTR_I64_EQ)
+			  (INSTR_IF (valtype i64))
+			  ;; if cons type, call +cons-type+ to get the type of cons
+			  (INSTR_LOCAL_GET 0)
+			  (INSTR_CALL (FUNC +cons-type+))
+			  ;; give the number the i64 type header
+			  (INSTR_I64_CONST 3)
+			  (INSTR_I64_SHL)
+			  (INSTR_I64_CONST 1)
+			  (INSTR_I64_OR)
+			  (INSTR_ELSE)
+			  ;; return nil
+			  (INSTR_I64_CONST 0)
+			  (INSTR_END)
+			  (INSTR_END))
+  1 1)
+			  
+(print (run-lisp '(cons-type "ASD ")))			  
+
+
+(run-lisp `(defun stringp(x)
+	     (eq (cons-type x) ,cons-string-type)))
+
 (print (run-lisp '(if (is-type 1 1) 40 20)))
 (print (run-lisp '(integerp 'asd)))
 (print (run-lisp '(integerp 10)))
 (print (run-lisp '(symbolp 'asd)))
 (print (run-lisp '(symbolp 3)))
+(print (run-lisp '(stringp "hello")))
+(print (run-lisp '(stringp 5)))
+(print (run-lisp '(stringp (cons 1 2))))
 ;(print (run-lisp '(error "EEEERR!")))
 
-(print
- (compile-lisp '(defun calc-hash (x)
-		  (if (integerp x)
-		      (* x 11114444)
-		      (if (symbolp x)
-			  (* x 55551111)
-			  (if (consp x)
-			      (+ (* (calc-hash (car x)) 22223333)
-				 (* (calc-hash (cdr x)) 222233334444))
-			      (error "unexpected situation")
-			      ))))))
-#|
-(print
- (run-lisp '(let ((x 5))
-		  (if (integerp x)
-		      (* x 11114444)
-		      (if (symbolp x)
-			  (* x 55551111)
-			  (if (consp x)
-			      (+ (* (calc-hash (car x)) 22223333)
-				 (* (calc-hash (cdr x)) 222233334444))
-			      (error "unexpected situation")
-			      ))))))
+(compile-lisp '(defun calc-hash (x)
+		(* 77776666
+		 (if (integerp x)
+		     (+ x 11114444)
+		     (if (symbolp x)
+			 (+ x 55551111)
+			 (if (consp x)
+			     (+ (* (calc-hash (car x)) 22223333)
+				(* (calc-hash (cdr x)) 122223333444))
+			     (error "unexpected situation")
+			     ))))))
 
-|#
-
-(print (run-lisp '(calc-hash 123)))  
+(print (run-lisp '(calc-hash 6)))  
 (print (compile-lisp '(calc-hash 123)))
 
 ;(print (run-lisp '(defun loop-print ()
@@ -1023,3 +1072,5 @@ step 3: bootstrap compiler in wasm itself.
 
 (print (run-lisp '(if (is-type 1 1) 40 20)))
 (print (run-lisp '(print 1)))
+
+(print (run-lisp '(* 100000 10000)))
