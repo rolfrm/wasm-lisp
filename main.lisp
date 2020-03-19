@@ -1,5 +1,5 @@
 (declaim (optimize (speed 0) (debug 3) (safety 3) (compilation-speed 0)))
-					;(ql:quickload 'ieee-floats)
+(ql:quickload 'ieee-floats)
 #| 
 
 A compiler infrastructure for compiling and executing lisp code on all platforms. Lisp compiled to WebAssembly.
@@ -126,6 +126,17 @@ step 3: bootstrap compiler in wasm itself.
 ;(defun read-f32(reader)
 ;  (let ((integer (read-uint reader)))
 ;    (ieee-floats:decode-float32 integer)))
+
+(defun u64-bytes (value)
+  (loop for x from 0 below 8 collect
+       (logand #xFF (ash value (* x -8)))))
+
+(defun encode-f64 (value)
+  (declare (number value))
+  (let ((int-value (ieee-floats:encode-float64 (coerce value 'double-float))))
+    (u64-bytes int-value)))
+
+(print (encode-f64 0))
 
 ;;; SECTION Utils
 
@@ -512,7 +523,6 @@ step 3: bootstrap compiler in wasm itself.
 (defun compile-lisp-inner(code)
   (cond
     ((eq code 'NIL) (emit '(INSTR_I64_CONST 0)))
-    ((null code) (emit '((INSTR_I64_CONST 0))))
     ((integerp code)
      (emit `(INSTR_I64_CONST (I64 ,code))))
     ((and (consp code) (integerp (car code)) (eq (cadr code) 'cons))
@@ -524,8 +534,8 @@ step 3: bootstrap compiler in wasm itself.
 	   (a (caddr code))
 	   (b (cadddr code)))
        (compile-lisp-inner test)
-       (emit `(INSTR_I64_CONST 3))
-       (emit `(INSTR_I64_SHR_S))
+       (emit `(INSTR_I64_CONST 0))
+       (emit `(INSTR_I64_NE))
        (emit '(INSTR_IF (valtype i64)))
        (compile-lisp-inner a)
        (emit '(INSTR_ELSE))
@@ -850,20 +860,6 @@ step 3: bootstrap compiler in wasm itself.
   (let* ((cons (alloc-str2 str)))
     (run-lisp `(set-cons-type ,cons ,cons-string-type))))
 
-(print (run-lisp '(cons-init)))
-(print (run-lisp '(if 1 2 3)))
-(print (run-lisp '(defun xfunc () 5)))
-(print (run-lisp '(xfunc)))
-(print (run-lisp '(if 0 2 (xfunc))))
-(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ (print x) 1)))))
-(print (run-lisp '(rec-func -5)))
-(print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
-(print (run-lisp '(xfunc2 35)))
-
-(print (run-lisp '(defvar glob 10)))
-(print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
-(run-lisp '(+ 1 2))
-(print (run-lisp '(* 1000000 1000000)))
 
 ;(defvar hello-world (alloc-str "Hello world!"))
 
@@ -998,7 +994,7 @@ step 3: bootstrap compiler in wasm itself.
 			  (INSTR_END))
   1 1)
 			  
-(print (run-lisp '(cons-type "ASD ")))			  
+(print (run-lisp '(cons-type "ASD ")))		  
 
 
 (run-lisp `(defun stringp(x)
@@ -1015,27 +1011,54 @@ step 3: bootstrap compiler in wasm itself.
 ;(print (run-lisp '(error "EEEERR!")))
 
 (compile-lisp '(defun calc-hash (x)
-		(* 77776666
+		(* 777766661111444422
 		 (if (integerp x)
-		     (+ x 11114444)
+		     (+ x 11114444333322221)
 		     (if (symbolp x)
-			 (+ x 55551111)
+			 (+ x 55552222333311112)
 			 (if (consp x)
-			     (+ (* (calc-hash (car x)) 22223333)
-				(* (calc-hash (cdr x)) 122223333444))
+			     (+ (* (calc-hash (car x)) 22221111112113333)
+				(* (calc-hash (cdr x)) 12222333311111444))
 			     (error "unexpected situation")
 			     ))))))
 
-(print (run-lisp '(calc-hash 6)))  
+(print (run-lisp '(calc-hash 615)))
+(loop for x from 0 below 10 do (print (run-lisp `(calc-hash ,x))))
 (print (compile-lisp '(calc-hash 123)))
 
-;(print (run-lisp '(defun loop-print ()
-;		   (let ((it 3))
-;		     (loop (not (eq it 0)
-
 (defun print-wasm(wasm)
-  (loop for x in wasm do
-       (print x)))
+  (mapcar #'print wasm))
+
+(print (run-lisp '(cons-init)))
+(print (run-lisp '(if 1 2 3)))
+(print (run-lisp '(defun xfunc () 5)))
+(print (run-lisp '(xfunc)))
+(print (run-lisp '(if 0 2 (xfunc))))
+(run-lisp '(defun rec-func (x) (if x 0 (rec-func (+ (print x) 1)))))
+(print (run-lisp '(rec-func -5)))
+(print (run-lisp '(defun xfunc2 (x) (let ((y 2)) (+ 5 (+ y (let ((z 5)) (+ x z))))))))
+(print (run-lisp '(xfunc2 35)))
+
+(print (run-lisp '(defvar glob 10)))
+(print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
+(run-lisp '(+ 1 2))
+
+(defun check-eval-equals (code)
+  (let ((chk (eval code))
+	(test (run-lisp code)))
+    (print (list code chk test))
+    (assert (equal chk test) nil "execution not conformant ~a vs ~a" chk test))
+  nil
+  )
+
+(check-eval-equals '(+ 123 123))
+(check-eval-equals '(* 100000000 100000000))
+(check-eval-equals '10000000000000)
+(check-eval-equals '(if 1 1 0))
+(check-eval-equals '(if 0 1 0))
+(check-eval-equals '(if nil 1 0)
+(check-eval-equals '(let ((x -500) (y 10)) (+ (* x y) x)))
+;(check-eval-equals '(let ((x -500.0) (y 10.0)) (+ (* x y) x))) ;fp not yet supported.
 
 (print-wasm (compile-lisp '(print 1)))
 
@@ -1072,5 +1095,3 @@ step 3: bootstrap compiler in wasm itself.
 
 (print (run-lisp '(if (is-type 1 1) 40 20)))
 (print (run-lisp '(print 1)))
-
-(print (run-lisp '(* 100000 10000)))
