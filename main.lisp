@@ -113,6 +113,10 @@ step 3: bootstrap compiler in wasm itself.
 	 (rd (make-byte-stream :bytes (make-array (length bytes) :element-type '(unsigned-byte 8) :initial-contents bytes))))
     (read-uint-leb rd)))
 
+(defun char-byte(char)
+  (coerce (char-int char) 'unsigned-byte))
+
+
 ;; f64/32 not yet supported
 ;(defun read-f64(reader)
 ;  (let ((integer (read-uint64 reader)))
@@ -127,12 +131,6 @@ step 3: bootstrap compiler in wasm itself.
 (defun load-wasm-reader(file)
   (let ((f (open file :direction :input :element-type 'unsigned-byte)))
     f))
-
-
-
-
-(defun char-byte(char)
-  (coerce (char-int char) 'unsigned-byte))
 
 (defparameter *wasm-magic* (int-from-bytes 0 (char-int #\a) (char-int #\s) (char-int #\m)))
 (defparameter *wasm-version* (int-from-bytes 1 0 0 0))
@@ -435,21 +433,21 @@ step 3: bootstrap compiler in wasm itself.
   (make-byte-stream :bytes (vector (instr-to-int 'I32_CONST) '4))
   )
 
+;;; Section Compiler
 (defvar emitf (lambda (x) ))
 (defun emit(x)
   (funcall emitf x)
   )
 
-(defvar awsm-module nil)
-
+(defvar *awsm-module* nil)
 (defvar *awsm-functions* (make-hash-table))
 
 (defun register-function (name-symbol id argcnt)
   (setf (gethash name-symbol *awsm-functions*) (cons id argcnt)))  
 
 (defun import-function (import-name symbol)
-  (let ((id (awsm-get-function awsm-module import-name)))
-    (register-function symbol id (awsm-get-function-arg-cnt awsm-module id))))
+  (let ((id (awsm-get-function *awsm-module* import-name)))
+    (register-function symbol id (awsm-get-function-arg-cnt *awsm-module* id))))
 
 (defun lookup-symbol (sym)
   (multiple-value-bind (v exists) (gethash sym *awsm-functions*)
@@ -485,7 +483,7 @@ step 3: bootstrap compiler in wasm itself.
   (multiple-value-bind (id exists)  (gethash name *globals*)
     (if exists
 	id
-	(let ((newid (awsm-new-global awsm-module)))
+	(let ((newid (awsm-new-global *awsm-module*)))
 	  (setf (gethash name *globals*) newid)
 	  newid))))
 
@@ -577,7 +575,7 @@ step 3: bootstrap compiler in wasm itself.
 	    (body-cnt (length body))
 	    (args (car args-dr))
 	    (locals-table (compute-locals args))
-	    (_ (awsm-define-function awsm-module name-str (sb-sys:int-sap 0) 0 1 (length args)))
+	    (_ (awsm-define-function *awsm-module* name-str (sb-sys:int-sap 0) 0 1 (length args)))
 	    (__ (register-function name _ (length args)))
 	    (code (compile-lisp
 		   (if (eq body-cnt 1) (car body) `(progn @,body) )
@@ -586,7 +584,7 @@ step 3: bootstrap compiler in wasm itself.
 	    (byte-code (gen-byte-code code))
 	    (byte-code-buffer (make-array (length byte-code) :element-type '(unsigned-byte 8) :initial-contents byte-code))
 	 
-	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
+	    (f (awsm-define-function *awsm-module* name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
 	    )
        (register-function name f (length args))
        (compile-lisp-inner `(quote ,name))))
@@ -749,9 +747,9 @@ step 3: bootstrap compiler in wasm itself.
 
 ;(awsm-diagnostic t)
 
-(setf awsm-module (awsm-load-module-from-file "awsmlib.wasm"))
+(setf *awsm-module* (awsm-load-module-from-file "awsmlib.wasm"))
 (defvar addfun (byte-vector 0 INSTR_I64_ADD INSTR_END))
-(defvar plus-add1 (awsm-get-function awsm-module "add1"))
+(defvar plus-add1 (awsm-get-function *awsm-module* "add1"))
 (import-function "add2" '+)
 (import-function "sub2" '-)
 (import-function "div2" '/)
@@ -787,10 +785,10 @@ step 3: bootstrap compiler in wasm itself.
 	 (buf (make-byte-code-array proto))
 	 (name "repl"))
     
-    (awsm-define-function awsm-module name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)
-    (let ((trd (awsm-load-thread awsm-module name)))
+    (awsm-define-function *awsm-module* name (sb-sys:vector-sap buf) (array-total-size buf) 1 0)
+    (let ((trd (awsm-load-thread *awsm-module* name)))
       (awsm-thread-keep-alive trd 1)
-      (let* ((status (awsm-process awsm-module 10000))
+      (let* ((status (awsm-process *awsm-module* 10000))
 	     (v (awsm-pop-i64 trd))
 	     (v2 (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
@@ -823,7 +821,7 @@ step 3: bootstrap compiler in wasm itself.
   (let* (
 	(str-len (+ 1 (length str-base)))
 	(heap-alloc (run-lisp `(alloc ,str-len)))
-	(heap-ptr (sb-alien:alien-sap (awsm-module-heap-ptr awsm-module)))
+	(heap-ptr (sb-alien:alien-sap (awsm-module-heap-ptr *awsm-module*)))
 	(str (sb-sys:sap+ heap-ptr heap-alloc))
 	(str2 (sb-alien:make-alien-string str-base)))
     (memcpy str str2  str-len)
@@ -905,7 +903,7 @@ step 3: bootstrap compiler in wasm itself.
 (defun def-asm-fcn (name code retcnt argcnt)
   (declare (symbol name) (integer argcnt retcnt) ((cons cons) code))
   (let ((bytecode (make-byte-code-array (gen-byte-code code))))
-    (let ((fcnid (awsm-define-function awsm-module (symbol-name (symbol-c-name name)) (sb-sys:vector-sap bytecode) (array-total-size bytecode) retcnt argcnt)))
+    (let ((fcnid (awsm-define-function *awsm-module* (symbol-name (symbol-c-name name)) (sb-sys:vector-sap bytecode) (array-total-size bytecode) retcnt argcnt)))
       (register-function name fcnid argcnt))))
 
 (def-asm-fcn 'not '((LOCALS 0) (INSTR_LOCAL_GET 0) (INSTR_I64_CONST 0) (INSTR_I64_EQ)
