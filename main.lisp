@@ -1,20 +1,13 @@
 (declaim (optimize (speed 0) (debug 3) (safety 3) (compilation-speed 0)))
 					;(ql:quickload 'ieee-floats)
-#| Superlisp compiler services
+#| 
 
-A compiler infrastructure for compiling and executing lisp code on all platforms.
-lisp interpreted + later type annotations
+A compiler infrastructure for compiling and executing lisp code on all platforms. Lisp compiled to WebAssembly.
 
-can be executed on top of a virtual machine or on bare metal.
+it is based on a libawsm for running wasm code. 
 
-There is a lisp (subset of scheme or something like that).
-there is a compiler for this which emits webassembly code, the compiler itself can run on webassembly, because it is written in the same langue.
-
-it is all based on a lisp port of wasmrun, because it would be too complicated to make c compile itself.
-
-step 1: To be able to execute wasm code on lisp.
-step 2: compiling lisp to wasm.
-step 3: bootstrap
+step 1: compiling lisp to wasm.
+step 3: bootstrap compiler in wasm itself.
 |#
 
 (defpackage :awsm 
@@ -22,6 +15,9 @@ step 3: bootstrap
 
 (in-package :awsm)
 
+;;; Section Utils / byte stream
+
+;; Reads bytes from an array or stream.
 (defstruct byte-stream
   (bytes)
   (offset 0))
@@ -41,10 +37,7 @@ step 3: bootstrap
       (byte-stream-read-byte str)
     (cl:read-byte str eof-error-p eof-value)))
 
-
-(defun load-wasm-reader(file)
-  (let ((f (open file :direction :input :element-type 'unsigned-byte)))
-    f))
+;;; Section Utils / bits
 
 (defun int-from-bytes (a b c d)
   (logior a (ash b 8) (ash c 16) (ash d 24)))
@@ -120,6 +113,7 @@ step 3: bootstrap
 	 (rd (make-byte-stream :bytes (make-array (length bytes) :element-type '(unsigned-byte 8) :initial-contents bytes))))
     (read-uint-leb rd)))
 
+;; f64/32 not yet supported
 ;(defun read-f64(reader)
 ;  (let ((integer (read-uint64 reader)))
 ;    (ieee-floats:decode-float64 integer)))
@@ -127,6 +121,14 @@ step 3: bootstrap
 ;(defun read-f32(reader)
 ;  (let ((integer (read-uint reader)))
 ;    (ieee-floats:decode-float32 integer)))
+
+
+
+(defun load-wasm-reader(file)
+  (let ((f (open file :direction :input :element-type 'unsigned-byte)))
+    f))
+
+
 
 
 (defun char-byte(char)
@@ -440,17 +442,17 @@ step 3: bootstrap
 
 (defvar awsm-module nil)
 
-(defvar fun-ids (make-hash-table))
+(defvar *awsm-functions* (make-hash-table))
 
-(defun register-function (name-symbol id)
-  (setf (gethash name-symbol fun-ids) id))  
+(defun register-function (name-symbol id argcnt)
+  (setf (gethash name-symbol *awsm-functions*) (cons id argcnt)))  
 
 (defun import-function (import-name symbol)
   (let ((id (awsm-get-function awsm-module import-name)))
-    (register-function symbol id)))
+    (register-function symbol id (awsm-get-function-arg-cnt awsm-module id))))
 
 (defun lookup-symbol (sym)
-  (multiple-value-bind (v exists) (gethash sym fun-ids)
+  (multiple-value-bind (v exists) (gethash sym *awsm-functions*)
     (assert exists)
     v))
 
@@ -547,10 +549,15 @@ step 3: bootstrap
 	    (body (car body-dr)))
        (compile-lisp-inner body)
        (let ((glob (get-global name)))
-	 (if glob (emit `(INSTR_GLOBAL_SET ,glob))
+	 (if glob (progn
+		    (emit `(INSTR_GLOBAL_SET ,glob))
+		    (emit `(INSTR_GLOBAL_GET ,glob)))
 	     (let ((local (get-local name)))
 	       (if local
-		   (emit `(INSTR_LOCAL_SET ,local))
+		   (progn
+		     (emit `(INSTR_LOCAL_SET ,local))
+		     (emit `(INSTR_LOCAL_GET ,local))
+		     )
 		   (error "Unknown symbol ~a" name)
 		   ))))))
     ((and (consp code) (eq 'progn (car code)))
@@ -571,7 +578,7 @@ step 3: bootstrap
 	    (args (car args-dr))
 	    (locals-table (compute-locals args))
 	    (_ (awsm-define-function awsm-module name-str (sb-sys:int-sap 0) 0 1 (length args)))
-	    (__ (register-function name _))
+	    (__ (register-function name _ (length args)))
 	    (code (compile-lisp
 		   (if (eq body-cnt 1) (car body) `(progn @,body) )
 		   locals-table
@@ -581,7 +588,7 @@ step 3: bootstrap
 	 
 	    (f (awsm-define-function awsm-module name-str (sb-sys:vector-sap byte-code-buffer) (array-total-size byte-code-buffer) 1 (length args)))
 	    )
-       (register-function name f)
+       (register-function name f (length args))
        (compile-lisp-inner `(quote ,name))))
     ((and (consp code) (eq (car code) 'defvar))
      (let* ((name-dr (cdr code))
@@ -621,11 +628,16 @@ step 3: bootstrap
        ))
      
     ((consp code)
-     (loop for l in (cdr code) do
-	  (compile-lisp-inner l))
-     (let ((symname (car code)))
-       (emit `(INSTR_CALL (func ,symname)))
-       )
+     (let ((argcnt (loop for l in (cdr code) sum
+	  (progn
+	    (compile-lisp-inner l)
+	    1))))
+       (let ((symname (car code)))
+	 (destructuring-bind (fcn . argcnt2) (lookup-symbol symname)
+	   (assert (eq argcnt argcnt2) nil "Invalid number of arguments for ~a" symname))
+		   
+	 (emit `(INSTR_CALL (func ,symname)))
+       ))
      )
     ((and (symbolp code) (integerp (get-local code)))
      (emit `(INSTR_LOCAL_GET ,(get-local code)))
@@ -689,7 +701,9 @@ step 3: bootstrap
 		    ((integerp part)
 		     (setf buffer (append (encode-int-leb part) buffer)))
 		    ((and (consp part) (eq (car part) 'func))
-		     (push (lookup-symbol (cadr part)) buffer))
+		     (destructuring-bind (fcn . argcnt) (lookup-symbol (cadr part))
+		       
+		       (push fcn buffer)))
 		    ((and (consp part) (eq (car part) 'symbol))
 		     (setf buffer (append (reverse (encode-int-leb (get-symbol (cadr part)))) buffer)))
 		    ((and (consp part) (eq (car part) 'I64))
@@ -722,13 +736,16 @@ step 3: bootstrap
 		      (name c-string) (data (* unsigned-char)) (len int) (retcnt int) (argcnt int))
 (define-alien-routine "awsm_process" int (mod (* awsm-module)) (cnt int))
 (define-alien-routine "awsm_get_function" int (module (* awsm-module)) (name c-string))
+(define-alien-routine "awsm_get_function_arg_cnt" int (module (* awsm-module)) (id int))
+(define-alien-routine "awsm_get_function_ret_cnt" int (module (* awsm-module)) (id int))
 (define-alien-routine "awsm_load_thread" (* awsm-thread) (module (* awsm-module)) (symbol c-string))
 (define-alien-routine "awsm_diagnostic" void (enabled boolean))
 (define-alien-routine "awsm_thread_keep_alive" void (thread (* awsm-thread)) (keep-alive int))
 (define-alien-routine "awsm_pop_i64" int (thread (* awsm-thread)))
 (define-alien-routine "awsm_new_global" int (module (* awsm-module)))
 (define-alien-routine "awsm_module_heap_ptr" (* t) (module (* awsm-module)))
-(define-alien-routine "memcpy" int (dst (* t)) (src (* t)) (bytes int))
+(define-alien-routine "memcpy" int (dst (* t)) (src (* t)) (bytes int)) 
+(define-alien-routine "awsm_thread_error" c-string (thread (* awsm-thread))) 
 
 ;(awsm-diagnostic t)
 
@@ -774,11 +791,19 @@ step 3: bootstrap
     (let ((trd (awsm-load-thread awsm-module name)))
       (awsm-thread-keep-alive trd 1)
       (let* ((status (awsm-process awsm-module 10000))
-	     (v (awsm-pop-i64 trd)))
+	     (v (awsm-pop-i64 trd))
+	     (v2 (awsm-pop-i64 trd)))
 	(awsm-thread-keep-alive trd 0)
+	(let ((err (awsm-thread-error trd)))
+	  (when err (error err)))
+	;(print (list status (awsm-thread-error trd)))
 	(when (eq status 1)
 	  (let ((type-code (logand v #b00000111))
-		(value (ash v -3)))
+		(value (ash v -3))
+		(err (awsm-thread-error trd)))
+	    
+	    (when err
+	      (error error))
 	    (case type-code
 	      (0 (if (eq value 0) 'nil t))
 	      (1 value)
@@ -838,6 +863,7 @@ step 3: bootstrap
 
 (print (run-lisp '(defvar glob 10)))
 (print (run-lisp '(let ((a 5) (b 7)) (+ a (+ b (let ((c 1000)) (+ c glob)))))))
+(run-lisp '(+ 1 2))
 
 ;(defvar hello-world (alloc-str "Hello world!"))
 
@@ -859,7 +885,8 @@ step 3: bootstrap
 (print (run-lisp '*symbols*))
 (print (run-lisp
 	'(defun add-symbol(sym name)
-	  (setf *symbols* (cons (cons sym name) *symbols*)))))
+	  (setf *symbols* (cons (cons sym name) *symbols*))
+	  )))
 
 (defun build-str(str)
   (let* ((a (alloc-str2 str))
@@ -879,7 +906,7 @@ step 3: bootstrap
   (declare (symbol name) (integer argcnt retcnt) ((cons cons) code))
   (let ((bytecode (make-byte-code-array (gen-byte-code code))))
     (let ((fcnid (awsm-define-function awsm-module (symbol-name (symbol-c-name name)) (sb-sys:vector-sap bytecode) (array-total-size bytecode) retcnt argcnt)))
-      (register-function name fcnid))))
+      (register-function name fcnid argcnt))))
 
 (def-asm-fcn 'not '((LOCALS 0) (INSTR_LOCAL_GET 0) (INSTR_I64_CONST 0) (INSTR_I64_EQ)
 		    (INSTR_I64_CONST 3) (INSTR_I64_SHL) ; if 0 -> (nil 0). if != 0 -> t
@@ -891,6 +918,71 @@ step 3: bootstrap
 		   (INSTR_I64_EQ)
 		   (INSTR_I64_CONST 3) (INSTR_I64_SHL) ; if 0 -> (nil 0). if != 0 -> t
 		   (INSTR_END)) 1 2)
+(def-asm-fcn 'is-type '((locals 0)
+		      (INSTR_LOCAL_GET 0)
+		      (INSTR_I64_CONST 7)
+		      (INSTR_I64_AND)
+		      (INSTR_LOCAL_GET 1)
+		      (INSTR_I64_CONST 3)
+		      (INSTR_I64_SHR_S)
+		      (INSTR_I64_EQ)
+			(INSTR_I64_CONST 3)
+			(INSTR_I64_SHL)
+			(INSTR_END)
+		      ) 1 2)
+
+(defvar *awsm-integer-type* 1)
+(defvar *awsm-float-type* 2)
+(defvar *awsm-cons-type* 3)
+(defvar *awsm-symbol-type* 4)
+
+(run-lisp `(defun integerp (x)
+	    (is-type x ,*awsm-integer-type*)))
+
+(run-lisp `(defun floatp (x)
+	    (is-type x ,*awsm-float-type* )))
+
+(run-lisp `(defun symbolp (x)
+	    (is-type x ,*awsm-symbol-type*)))
+
+(run-lisp `(defun consp (x)
+	    (is-type x ,*awsm-cons-type*)))
+
+(print (run-lisp '(if (is-type 1 1) 40 20)))
+(print (run-lisp '(integerp 'asd)))
+(print (run-lisp '(integerp 10)))
+(print (run-lisp '(symbolp 'asd)))
+(print (run-lisp '(symbolp 3)))
+;(print (run-lisp '(error "EEEERR!")))
+
+(print
+ (compile-lisp '(defun calc-hash (x)
+		  (if (integerp x)
+		      (* x 11114444)
+		      (if (symbolp x)
+			  (* x 55551111)
+			  (if (consp x)
+			      (+ (* (calc-hash (car x)) 22223333)
+				 (* (calc-hash (cdr x)) 222233334444))
+			      (error "unexpected situation")
+			      ))))))
+#|
+(print
+ (run-lisp '(let ((x 5))
+		  (if (integerp x)
+		      (* x 11114444)
+		      (if (symbolp x)
+			  (* x 55551111)
+			  (if (consp x)
+			      (+ (* (calc-hash (car x)) 22223333)
+				 (* (calc-hash (cdr x)) 222233334444))
+			      (error "unexpected situation")
+			      ))))))
+
+|#
+
+(print (run-lisp '(calc-hash 123)))  
+(print (compile-lisp '(calc-hash 123)))
 
 ;(print (run-lisp '(defun loop-print ()
 ;		   (let ((it 3))
@@ -899,6 +991,8 @@ step 3: bootstrap
 (defun print-wasm(wasm)
   (loop for x in wasm do
        (print x)))
+
+(print-wasm (compile-lisp '(print 1)))
 
 (let ((a (build-str "A"))
       (b (build-str "B"))
@@ -928,4 +1022,7 @@ step 3: bootstrap
   (run-lisp '(eq 2 2))
   (run-lisp '(eq 'a 'a))
   (run-lisp '(print (cons "hello" (cons 'bbc 'ccdd))))
+  (run-lisp 1)
   )
+
+(print (run-lisp '(if (is-type 1 1) 40 20)))

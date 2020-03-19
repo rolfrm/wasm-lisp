@@ -58,3 +58,5 @@ The NIL type covers both nil/truth values. Checking for nil/null is easy. Its ju
 Any more sophistical type is some kind of cons type. A cons is defined as two i64 values and a single 8 bit type header. For now these are defined:
 0 - Regular cons list.
 1 - Chunked strings. A string is a cons list with each CAR being 7 bytes of string data and each CDR being the rest of the string.
+2 - struct
+3 - array

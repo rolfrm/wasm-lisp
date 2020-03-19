@@ -1,4 +1,4 @@
-//compile with clang: clang-9 --target=wasm32 -nostdlib -Wl,--export-all -Wl,--no-entry -O3 -Wl,-no-gc-sections testlib2.c -Wl,--allow-undefined  -o testlib3.wasm 
+//compile with clang: clang-9 --target=wasm32 -nostdlib -Wl,--export-all -Wl,--no-entry -O3 -Wl,-no-gc-sections awsmlib.c -Wl,--allow-undefined  -o awsmlib.wasm 
 
 void * get_symbol(const char * module, const char * symbol, unsigned int argcount, unsigned int retcount);
 
@@ -380,9 +380,10 @@ void string_to_buffer(i64 str, char * buf){
 
 void lisp_error(i64 err){
   static char buffer_error[100];
- 
+  
   ASSERT(stringp(err));
   string_to_buffer(err, buffer_error);
+  //print_str(buffer_error);
   error(buffer_error);
 
 }
