@@ -178,7 +178,8 @@ typedef enum{
 
 typedef enum{
   TYPE_CONS_CONS = 0,
-  TYPE_CONS_STRING = 1
+  TYPE_CONS_STRING = 1,
+  TYPE_CONS_ARRAY = 2
 }econs_type;
 
 i64 mknil(){ return 0; }
