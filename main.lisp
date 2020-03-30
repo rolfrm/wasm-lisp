@@ -10,9 +10,6 @@ step 1: compiling lisp to wasm.
 step 3: bootstrap compiler in wasm itself.
 |#
 
-(defpackage :awsm 
-  (:use "COMMON-LISP" "SB-ALIEN"))
-
 (in-package :awsm)
 
 ;;;; Section Utils / byte stream
@@ -287,7 +284,7 @@ step 3: bootstrap compiler in wasm itself.
 		   (value (parse-integer (subseq line (+ space 3) ) :radix 16)))
 	       (list (intern name) value )
 	     ))))))
-
+(print *compile-file-pathname*)
 (let ((instrs (load-instr-file "instruction.list"))
       (_max -1))
   (loop for x in instrs
